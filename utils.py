@@ -1,8 +1,11 @@
 import numpy as np
 import pandas as pd
 
-from typing import Callable, Sequence, Tuple
+from typing import Callable, Optional, Sequence, Tuple
+
+from sklearn.impute import SimpleImputer
 from sklearn.model_selection import KFold
+
 import evaluation
 
 # Labels store glucose in mg/dL; convert to mmol/L for modeling and reporting.
@@ -22,6 +25,34 @@ def safe_float(value):
         return np.nan
 
 
+def _prepare_xy(X: pd.DataFrame, y: pd.Series) -> tuple[pd.DataFrame, pd.Series]:
+    X = X.replace([np.inf, -np.inf], np.nan)
+    mask = y.notna()
+    if not mask.all():
+        dropped = int((~mask).sum())
+        print(f"Warning: dropping {dropped} rows with missing target before CV")
+    X = X.loc[mask].reset_index(drop=True)
+    y = y.loc[mask].reset_index(drop=True)
+    return X, y
+
+
+def _impute_features(
+    X_train: pd.DataFrame,
+    X_other: pd.DataFrame,
+    imputer: Optional[SimpleImputer] = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, SimpleImputer]:
+    if imputer is None:
+        imputer = SimpleImputer(strategy='median')
+        train_values = imputer.fit_transform(X_train)
+    else:
+        train_values = imputer.transform(X_train)
+
+    X_train_imputed = pd.DataFrame(train_values, columns=X_train.columns, index=X_train.index)
+    other_values = imputer.transform(X_other)
+    X_other_imputed = pd.DataFrame(other_values, columns=X_other.columns, index=X_other.index)
+    return X_train_imputed, X_other_imputed, imputer
+
+
 def run_kfold_regression(
     X: pd.DataFrame,
     y: pd.Series,
@@ -31,19 +62,22 @@ def run_kfold_regression(
 ) -> Tuple[object, Sequence[dict], np.ndarray]:
     """Run k-fold CV for a regression estimator.
 
-    - Drops rows with missing values before CV (minimal approach).
+    - Drops rows with missing targets before CV.
+    - Median-imputes missing feature values per fold (fit on train only).
     - Fits model_factory() per-fold on training rows and predicts validation rows.
     - Prints per-fold and aggregate metrics and returns final model refit on full data.
     """
     cv = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+    X, y = _prepare_xy(X, y)
 
-    # drop any rows with missing values for simple, minimal pipeline
-    mask = X.notna().all(axis=1) & y.notna()
-    if not mask.all():
-        dropped = int((~mask).sum())
-        print(f"Warning: dropping {dropped} rows with missing values before CV")
-    X = X.loc[mask].reset_index(drop=True)
-    y = y.loc[mask].reset_index(drop=True)
+    if X.isna().any().any():
+        nan_columns = X.columns[X.isna().any()].tolist()
+        print(
+            f"Warning: imputing missing values in {len(nan_columns)} feature(s): "
+            f"{', '.join(nan_columns)}"
+        )
+
+    evaluation.print_target_stats(y.values)
 
     fold_metrics = []
     oof_predictions = np.empty(len(y), dtype=float)
@@ -55,6 +89,7 @@ def run_kfold_regression(
         X_val = X.iloc[val_index]
         y_val = y.iloc[val_index]
 
+        X_train, X_val, _ = _impute_features(X_train, X_val)
         model.fit(X_train, y_train)
         predictions = model.predict(X_val)
         oof_predictions[val_index] = predictions
@@ -74,6 +109,7 @@ def run_kfold_regression(
 
     evaluation.print_regression_report(y.values, oof_predictions)
 
+    X_imputed, _, imputer = _impute_features(X, X)
     final_model = model_factory()
-    final_model.fit(X, y)
+    final_model.fit(X_imputed, y)
     return final_model, fold_metrics, oof_predictions

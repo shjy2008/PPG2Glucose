@@ -5,7 +5,8 @@ import pandas as pd
 from pathlib import Path
 from utils import mg_dl_to_mmol_l, safe_float
 from data_basic_info import extract_basic_info
-from data_ppg import extract_raw_ppg, read_signal_waveform
+from data_ppg import extract_raw_ppg, read_signal_waveform, extract_ppg_bpm
+# from data_ppg_basic import extract_raw_ppg, read_signal_waveform, extract_ppg_bpm
 from sklearn.model_selection import KFold
 
 BASIC_FEATURE_KEYS = ('sex', 'age', 'height', 'weight')
@@ -134,14 +135,14 @@ def _load_southwest_dataset(root: Path) -> pd.DataFrame:
             print('Skipping subject', row['subject_ID'], 'with invalid ID or target', target)
             continue
 
+        basic_info_dict = extract_basic_info(row)
+        if not basic_info_dict:
+            continue
+
         subject_id_int = int(subject_id)
         signal_path = ppg_dir / f'{subject_id_int}.txt'
         if not signal_path.exists():
             print('Skipping subject', subject_id_int, 'because signal file does not exist:', signal_path.name)
-            continue
-
-        basic_info_dict = extract_basic_info(row)
-        if not basic_info_dict:
             continue
 
         record = {
@@ -150,6 +151,7 @@ def _load_southwest_dataset(root: Path) -> pd.DataFrame:
         }
         record.update(basic_info_dict)
         record.update(extract_raw_ppg(signal_path))
+        record.update(extract_ppg_bpm(row))
         records.append(record)
 
     if not records:

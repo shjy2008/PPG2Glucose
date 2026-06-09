@@ -1,0 +1,225 @@
+import argparse
+from typing import Optional
+
+import numpy as np
+import torch
+from torch import nn
+from torch.utils.data import DataLoader, TensorDataset
+
+import evaluation
+import data_loader
+
+
+def build_parser():
+    p = argparse.ArgumentParser()
+    p.add_argument('--dataset', default='southwest', help='southwest or kaggle')
+    p.add_argument('--n-splits', type=int, default=5)
+    p.add_argument('--seed', type=int, default=42)
+    p.add_argument('--epochs', type=int, default=25)
+    p.add_argument('--batch-size', type=int, default=32)
+    p.add_argument('--learning-rate', type=float, default=1e-3)
+    p.add_argument('--weight-decay', type=float, default=1e-4)
+    p.add_argument('--signal-length', type=int, default=0, help='0 = median waveform length')
+    p.add_argument('--include-basic', dest='include_basic', action='store_true')
+    p.add_argument('--no-basic', dest='include_basic', action='store_false')
+    p.set_defaults(include_basic=True)
+    return p
+
+
+def build_model_inputs(
+    signals: np.ndarray,
+    demographics: np.ndarray,
+    include_basic: bool,
+) -> np.ndarray:
+    if include_basic and demographics.size:
+        return np.concatenate([signals, demographics], axis=1)
+    return signals
+
+
+def standardize_train_test(X_train: np.ndarray, X_test: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    mean = X_train.mean()
+    std = X_train.std()
+    if std == 0:
+        std = 1.0
+    return (X_train - mean) / std, (X_test - mean) / std
+
+
+class PPGCNNRegressor(nn.Module):
+    def __init__(self, input_length: int):
+        super().__init__()
+        self.network = nn.Sequential(
+            nn.Conv1d(1, 16, kernel_size=9, padding=4),
+            nn.BatchNorm1d(16),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel_size=2),
+            nn.Conv1d(16, 32, kernel_size=7, padding=3),
+            nn.BatchNorm1d(32),
+            nn.ReLU(),
+            nn.MaxPool1d(kernel_size=2),
+            nn.Conv1d(32, 64, kernel_size=5, padding=2),
+            nn.BatchNorm1d(64),
+            nn.ReLU(),
+            nn.AdaptiveAvgPool1d(1),
+        )
+        self.head = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(64, 32),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(32, 1),
+        )
+
+    def forward(self, inputs):
+        features = self.network(inputs)
+        outputs = self.head(features)
+        return outputs.squeeze(-1)
+
+
+def make_loader(X: np.ndarray, y: Optional[np.ndarray], batch_size: int, shuffle: bool) -> DataLoader:
+    tensor_x = torch.from_numpy(X[:, None, :]).float()
+    if y is None:
+        dataset = TensorDataset(tensor_x)
+    else:
+        tensor_y = torch.from_numpy(y).float()
+        dataset = TensorDataset(tensor_x, tensor_y)
+    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
+
+
+def train_model(
+    model: nn.Module,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    epochs: int,
+    learning_rate: float,
+    weight_decay: float,
+    device: torch.device,
+) -> None:
+    criterion = nn.MSELoss()
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+    best_state = None
+    best_val_loss = float('inf')
+    patience = 5
+    remaining_patience = patience
+
+    for _ in range(epochs):
+        model.train()
+        for batch_x, batch_y in train_loader:
+            batch_x = batch_x.to(device)
+            batch_y = batch_y.to(device)
+
+            optimizer.zero_grad()
+            predictions = model(batch_x)
+            loss = criterion(predictions, batch_y)
+            loss.backward()
+            optimizer.step()
+
+        model.eval()
+        val_losses = []
+        with torch.no_grad():
+            for batch_x, batch_y in val_loader:
+                batch_x = batch_x.to(device)
+                batch_y = batch_y.to(device)
+                predictions = model(batch_x)
+                val_losses.append(criterion(predictions, batch_y).item())
+
+        mean_val_loss = float(np.mean(val_losses)) if val_losses else float('inf')
+        if mean_val_loss < best_val_loss:
+            best_val_loss = mean_val_loss
+            best_state = {name: parameter.detach().cpu().clone() for name, parameter in model.state_dict().items()}
+            remaining_patience = patience
+        else:
+            remaining_patience -= 1
+            if remaining_patience <= 0:
+                break
+
+    if best_state is not None:
+        model.load_state_dict(best_state)
+
+
+def predict(model: nn.Module, loader: DataLoader, device: torch.device) -> np.ndarray:
+    model.eval()
+    predictions = []
+    with torch.no_grad():
+        for batch in loader:
+            batch_x = batch[0].to(device)
+            batch_predictions = model(batch_x).detach().cpu().numpy()
+            predictions.append(batch_predictions)
+    if not predictions:
+        return np.empty(0, dtype=np.float32)
+    return np.concatenate(predictions, axis=0)
+
+
+def run_fold(
+    X: np.ndarray,
+    y: np.ndarray,
+    train_index: np.ndarray,
+    val_index: np.ndarray,
+    args,
+    device: torch.device,
+) -> tuple[dict, np.ndarray]:
+    X_train, X_val = X[train_index], X[val_index]
+    y_train, y_val = y[train_index], y[val_index]
+    X_train, X_val = standardize_train_test(X_train, X_val)
+
+    train_loader = make_loader(X_train, y_train, batch_size=args.batch_size, shuffle=True)
+    val_loader = make_loader(X_val, y_val, batch_size=args.batch_size, shuffle=False)
+
+    model = PPGCNNRegressor(input_length=X.shape[1]).to(device)
+    train_model(
+        model,
+        train_loader,
+        val_loader,
+        epochs=args.epochs,
+        learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+        device=device,
+    )
+
+    predictions = predict(model, val_loader, device)
+    metrics = evaluation.evaluate_regression(y_val, predictions)
+    return metrics, predictions
+
+
+def main():
+    args = build_parser().parse_args()
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+
+    print(f'Using dataset: {args.dataset}')
+    signals, demographics, y = data_loader.load_waveform_dataset(
+        dataset=args.dataset,
+        signal_length=args.signal_length,
+        include_basic=args.include_basic,
+    )
+    X = build_model_inputs(signals, demographics, include_basic=args.include_basic)
+    print(
+        f'Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}, '
+        f'waveform_length: {signals.shape[1]}, input_length: {X.shape[1]}'
+    )
+    evaluation.print_target_stats(y)
+
+    splitter = data_loader.get_kfold(n_splits=args.n_splits, seed=args.seed)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    fold_metrics = []
+    oof_predictions = np.empty(len(y), dtype=np.float32)
+
+    for fold_index, (train_index, val_index) in enumerate(splitter.split(X, y), start=1):
+        metrics, predictions = run_fold(X, y, train_index, val_index, args, device)
+        oof_predictions[val_index] = predictions
+        fold_metrics.append(metrics)
+        print(
+            f"Fold {fold_index}: RMSE={metrics['rmse']:.4f} mmol/L "
+            f"MAE={metrics['mae']:.4f} mmol/L R2={metrics['r2']:.4f}"
+        )
+
+    print('\nCross-validation summary:')
+    for metric_name in ('rmse', 'mae', 'r2'):
+        values = np.asarray([metrics[metric_name] for metrics in fold_metrics], dtype=float)
+        suffix = ' mmol/L' if metric_name in ('rmse', 'mae') else ''
+        print(f"{metric_name.upper()}{suffix}: {values.mean():.4f} ± {values.std(ddof=1):.4f}")
+
+    evaluation.print_regression_report(y, oof_predictions)
+
+
+if __name__ == '__main__':
+    main()

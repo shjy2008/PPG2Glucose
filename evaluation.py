@@ -3,6 +3,38 @@ import pandas as pd
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 
+def target_stats(y: np.ndarray) -> dict:
+    """Summary statistics for glucose targets in mmol/L."""
+    values = np.asarray(y, dtype=float).reshape(-1)
+    values = values[~np.isnan(values)]
+    if values.size == 0:
+        return {'n': 0, 'mean': np.nan, 'variance': np.nan, 'std': np.nan}
+    if values.size == 1:
+        return {
+            'n': 1,
+            'mean': float(values[0]),
+            'variance': 0.0,
+            'std': 0.0,
+        }
+    return {
+        'n': int(values.size),
+        'mean': float(np.mean(values)),
+        'variance': float(np.var(values, ddof=1)),
+        'std': float(np.std(values, ddof=1)),
+    }
+
+
+def print_target_stats(y: np.ndarray) -> None:
+    stats = target_stats(y)
+    print('\n---Target distribution (mmol/L)---')
+    print(f"n:        {stats['n']}")
+    print(f"mean:     {stats['mean']:.4f}")
+    print(f"variance: {stats['variance']:.4f} (mmol/L)²")
+    print(f"std:      {stats['std']:.4f}")
+    print(f"(Mean predictor baseline RMSE ≈ {stats['std']:.4f} mmol/L)")
+    print('\n----------------------------------\n')
+
+
 def evaluate_regression(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)
