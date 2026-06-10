@@ -151,7 +151,11 @@ def _load_southwest_dataset(root: Path) -> pd.DataFrame:
         }
         record.update(basic_info_dict)
         record.update(extract_raw_ppg(signal_path))
-        record.update(extract_ppg_bpm(row))
+        # PPG_BPM is not useful, including it cause worse performance (tested through 210 subjects with ppg_bpm)
+        # ppg_bpm = extract_ppg_bpm(row)
+        # if not ppg_bpm:
+        #     continue
+        # record.update(ppg_bpm)
         records.append(record)
 
     if not records:
