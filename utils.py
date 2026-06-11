@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from typing import Callable, Optional, Sequence, Tuple
+from typing import Callable, Dict, Mapping, Optional, Sequence, Tuple
 
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import KFold
@@ -113,3 +113,123 @@ def run_kfold_regression(
     final_model = model_factory()
     final_model.fit(X_imputed, y)
     return final_model, fold_metrics, oof_predictions
+
+
+def run_repeated_kfold_comparison(
+    X: pd.DataFrame,
+    y: pd.Series,
+    factories: Mapping[str, Callable[[int], object]],
+    n_splits: int = 5,
+    seeds: Sequence[int] = (42, 52, 62, 72, 82),
+    include_ensemble: bool = False,
+    ensemble_name: str = 'ensemble',
+    verbose: bool = True,
+) -> Tuple[Dict[str, list[dict]], pd.DataFrame]:
+    """Compare multiple regressors with repeated k-fold cross-validation.
+
+    Fairness guarantees:
+    - Within each seed, every model uses the exact same train/validation splits.
+    - Missing values are median-imputed per fold using training data only.
+    - Stochastic models should consume the current seed via their factory.
+
+    Returns:
+        fold_metrics_by_model: per-model list of metric dicts (one per fold × seed)
+        summary_df: mean ± std of per-fold scores, sorted by MAE
+    """
+    X, y = _prepare_xy(X, y)
+    model_names = list(factories.keys())
+    use_ensemble = include_ensemble and len(model_names) > 1
+    tracked_names = [*model_names, ensemble_name] if use_ensemble else model_names
+
+    if X.isna().any().any() and verbose:
+        nan_columns = X.columns[X.isna().any()].tolist()
+        print(
+            f"Warning: imputing missing values in {len(nan_columns)} feature(s): "
+            f"{', '.join(nan_columns)}"
+        )
+
+    if verbose:
+        evaluation.print_target_stats(y.values)
+        total_runs = len(seeds) * n_splits
+        print(
+            f'\nRepeated CV: {n_splits}-fold × {len(seeds)} seeds '
+            f'= {total_runs} evaluations per model'
+        )
+        print(f'Models: {", ".join(model_names)}')
+        if use_ensemble:
+            print(f'Ensemble: mean of {", ".join(model_names)}')
+        print(f'Seeds: {list(seeds)}\n')
+
+    fold_metrics_by_model: Dict[str, list[dict]] = {name: [] for name in tracked_names}
+
+    for seed_index, seed in enumerate(seeds, start=1):
+        cv = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+        if verbose:
+            print(f'--- Seed {seed} ({seed_index}/{len(seeds)}) ---')
+
+        for fold_index, (train_index, val_index) in enumerate(cv.split(X, y), start=1):
+            X_train = X.iloc[train_index]
+            y_train = y.iloc[train_index]
+            X_val = X.iloc[val_index]
+            y_val = y.iloc[val_index]
+            X_train, X_val, _ = _impute_features(X_train, X_val)
+
+            fold_line = []
+            fold_predictions = []
+            for name in model_names:
+                model = factories[name](seed)
+                model.fit(X_train, y_train)
+                predictions = model.predict(X_val)
+                fold_predictions.append(predictions)
+
+                metrics = evaluation.evaluate_regression(y_val.values, predictions)
+                fold_metrics_by_model[name].append(metrics)
+                fold_line.append(f'{name} MAE={metrics["mae"]:.4f}')
+
+            if use_ensemble:
+                ensemble_predictions = np.mean(fold_predictions, axis=0)
+                ensemble_metrics = evaluation.evaluate_regression(
+                    y_val.values,
+                    ensemble_predictions,
+                )
+                fold_metrics_by_model[ensemble_name].append(ensemble_metrics)
+                fold_line.append(f'{ensemble_name} MAE={ensemble_metrics["mae"]:.4f}')
+
+            if verbose:
+                print(f'  Fold {fold_index}: {" | ".join(fold_line)}')
+
+    summary_rows = []
+    for name in tracked_names:
+        summary = evaluation.summarize_repeated_cv_metrics(fold_metrics_by_model[name])
+        summary_rows.append({
+            'model': name,
+            'n_evaluations': summary['mae']['n'],
+            'mae_mean': summary['mae']['mean'],
+            'mae_std': summary['mae']['std'],
+            'rmse_mean': summary['rmse']['mean'],
+            'rmse_std': summary['rmse']['std'],
+            'r2_mean': summary['r2']['mean'],
+            'r2_std': summary['r2']['std'],
+        })
+
+    summary_df = pd.DataFrame(summary_rows).sort_values('mae_mean').reset_index(drop=True)
+
+    if verbose:
+        print('\n=== Repeated cross-validation summary (mean ± std) ===')
+        print_comparison_table(summary_df)
+
+    return fold_metrics_by_model, summary_df
+
+
+def print_comparison_table(summary_df: pd.DataFrame) -> None:
+    """Pretty-print a repeated-CV comparison table."""
+    rows = []
+    for _, row in summary_df.iterrows():
+        rows.append({
+            'Model': row['model'],
+            'MAE (mmol/L)': evaluation.format_metric_summary(row['mae_mean'], row['mae_std']),
+            'RMSE (mmol/L)': evaluation.format_metric_summary(row['rmse_mean'], row['rmse_std']),
+            'R2': evaluation.format_metric_summary(row['r2_mean'], row['r2_std']),
+            'N': int(row['n_evaluations']),
+        })
+    print(pd.DataFrame(rows).to_string(index=False))
