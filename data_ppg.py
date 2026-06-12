@@ -7,6 +7,26 @@ import pandas as pd
 
 from utils import safe_float
 
+# Fraction trimmed from the start before feature extraction.
+PPG_START_TRIM_FRACTION = 0.1
+
+
+def trim_signal_start(
+    signal: np.ndarray,
+    trim_fraction: float = PPG_START_TRIM_FRACTION,
+) -> np.ndarray:
+    """Return the signal after trimming the noisy start portion."""
+    values = np.asarray(signal, dtype=float).reshape(-1)
+    if values.size == 0 or trim_fraction <= 0:
+        return values
+    if trim_fraction >= 1.0:
+        raise ValueError('trim_fraction must be less than 1.0')
+
+    start = int(values.size * trim_fraction)
+    if start >= values.size:
+        return values
+    return values[start:]
+
 
 def extract_ppg_bpm(row: pd.Series) -> dict:
     ppg_bpm = safe_float(row.get('PPG/BPM'))
@@ -19,9 +39,13 @@ def extract_ppg_bpm(row: pd.Series) -> dict:
     }
 
 
-def read_signal_waveform(signal_path: Path) -> np.ndarray:
-    """Return the raw PPG samples from a signal CSV or text file."""
-    return _read_signal_values(signal_path)
+def read_signal_waveform(
+    signal_path: Path,
+    trim_fraction: float = PPG_START_TRIM_FRACTION,
+) -> np.ndarray:
+    """Return PPG samples from a signal file, skipping the noisy start."""
+    signal = _read_signal_values(signal_path)
+    return trim_signal_start(signal, trim_fraction=trim_fraction)
 
 
 def _read_signal_values(signal_path: Path) -> np.ndarray:
@@ -310,6 +334,9 @@ def extract_ppg_features(signal: np.ndarray) -> dict:
     return features
 
 
-def extract_raw_ppg(signal_path: str | Path) -> dict:
-    signal = _read_signal_values(Path(signal_path))
+def extract_raw_ppg(
+    signal_path: str | Path,
+    trim_fraction: float = PPG_START_TRIM_FRACTION,
+) -> dict:
+    signal = read_signal_waveform(Path(signal_path), trim_fraction=trim_fraction)
     return extract_ppg_features(signal)

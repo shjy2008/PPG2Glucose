@@ -134,7 +134,7 @@ def run_repeated_kfold_comparison(
 
     Returns:
         fold_metrics_by_model: per-model list of metric dicts (one per fold × seed)
-        summary_df: mean ± std of per-fold scores, sorted by MAE
+        summary_df: mean ± std of per-fold scores
     """
     X, y = _prepare_xy(X, y)
     model_names = list(factories.keys())
@@ -212,7 +212,7 @@ def run_repeated_kfold_comparison(
             'r2_std': summary['r2']['std'],
         })
 
-    summary_df = pd.DataFrame(summary_rows).sort_values('mae_mean').reset_index(drop=True)
+    summary_df = pd.DataFrame(summary_rows).reset_index(drop=True)
 
     if verbose:
         print('\n=== Repeated cross-validation summary (mean ± std) ===')

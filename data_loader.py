@@ -6,7 +6,7 @@ from pathlib import Path
 from utils import mg_dl_to_mmol_l, safe_float
 from data_basic_info import extract_basic_info
 from data_ppg import extract_raw_ppg, read_signal_waveform, extract_ppg_bpm
-# from data_ppg_basic import extract_raw_ppg, read_signal_waveform, extract_ppg_bpm
+# from data_ppg_basic import extract_raw_ppg, read_signal_waveform, extract_ppg_bpm  # performance worse than data_ppg
 from sklearn.model_selection import KFold
 
 BASIC_FEATURE_KEYS = ('sex', 'age', 'height', 'weight')
