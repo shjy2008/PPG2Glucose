@@ -15,7 +15,7 @@ def build_parser():
 
 def build_model(seed: int):
     return XGBRegressor(
-        objective='reg:squarederror',
+        objective='reg:absoluteerror', #'reg:squarederror',
         n_estimators=400,
         learning_rate=0.05,
         max_depth=4,

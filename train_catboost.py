@@ -18,7 +18,7 @@ def build_parser():
 
 def build_model(seed: int):
     return CatBoostRegressor(
-        loss_function='RMSE',
+        loss_function='MAE',#'RMSE',
         iterations=400,
         learning_rate=0.05,
         depth=4,
