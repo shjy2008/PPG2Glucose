@@ -3,8 +3,11 @@
 USE_GPU = False
 
 
-def catboost_task_type() -> str:
-    return 'GPU' if USE_GPU else 'CPU'
+def catboost_kwargs() -> dict:
+    if USE_GPU:
+        # GPU uses Bayesian bootstrap by default, which rejects subsample.
+        return {'task_type': 'GPU', 'bootstrap_type': 'Bernoulli'}
+    return {'task_type': 'CPU'}
 
 
 def xgboost_kwargs() -> dict:
