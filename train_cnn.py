@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 import evaluation
 import data_loader
+from config import torch_device
 
 
 def build_parser():
@@ -199,7 +200,7 @@ def main():
     evaluation.print_target_stats(y)
 
     splitter = data_loader.get_kfold(n_splits=args.n_splits, seed=args.seed)
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    device = torch_device()
     fold_metrics = []
     oof_predictions = np.empty(len(y), dtype=np.float32)
 

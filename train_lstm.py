@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 import evaluation
 import data_loader
+from config import torch_device
 
 
 def build_parser():
@@ -23,7 +24,6 @@ def build_parser():
     p.add_argument('--signal-length', type=int, default=2048, help='0 = median waveform length')
     p.add_argument('--hidden-size', type=int, default=64)
     p.add_argument('--num-layers', type=int, default=1)
-    p.add_argument('--device', choices=('auto', 'cpu', 'cuda'), default='auto')
     p.add_argument(
         '--quick',
         action='store_true',
@@ -45,17 +45,6 @@ def apply_quick_settings(args) -> None:
     args.signal_length = 1024
     args.hidden_size = 32
     args.bidirectional = False
-    args.device = 'cpu'
-
-
-def resolve_device(device_arg: str) -> torch.device:
-    if device_arg == 'cpu':
-        return torch.device('cpu')
-    if device_arg == 'cuda':
-        if not torch.cuda.is_available():
-            raise RuntimeError('CUDA was requested but is not available')
-        return torch.device('cuda')
-    return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 def normalize_signals_per_sample(signals: np.ndarray) -> np.ndarray:
@@ -293,7 +282,7 @@ def main():
         apply_quick_settings(args)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
-    device = resolve_device(args.device)
+    device = torch.device('cpu') if args.quick else torch_device()
 
     print(f'Using dataset: {args.dataset}')
     signals, demographics, y = data_loader.load_waveform_dataset(

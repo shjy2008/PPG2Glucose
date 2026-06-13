@@ -3,6 +3,7 @@ from xgboost import XGBRegressor
 import evaluation
 import data_loader
 import utils
+from config import xgboost_kwargs
 
 def build_parser():
     p = argparse.ArgumentParser()
@@ -22,8 +23,7 @@ def build_model(seed: int):
         colsample_bytree=0.9,
         reg_lambda=1.0,
         random_state=seed,
-        tree_method='hist',
-        n_jobs=-1,
+        **xgboost_kwargs(),
     )
 
 

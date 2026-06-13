@@ -5,6 +5,7 @@ from catboost import CatBoostRegressor
 import data_loader
 import evaluation
 import utils
+from config import catboost_task_type
 
 
 def build_parser():
@@ -24,6 +25,7 @@ def build_model(seed: int):
         subsample=0.9,
         reg_lambda=1.0,
         random_seed=seed,
+        task_type=catboost_task_type(),
         verbose=False,
     )
 

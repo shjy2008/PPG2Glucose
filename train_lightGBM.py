@@ -5,6 +5,7 @@ from lightgbm import LGBMRegressor
 import data_loader
 import evaluation
 import utils
+from config import lightgbm_kwargs
 
 
 def build_parser():
@@ -25,8 +26,8 @@ def build_model(seed: int):
         colsample_bytree=0.9,
         reg_lambda=1.0,
         random_state=seed,
-        n_jobs=-1,
         verbose=-1,
+        **lightgbm_kwargs(),
     )
 
 
