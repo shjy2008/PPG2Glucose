@@ -125,22 +125,22 @@ def _distribution_features(signal: np.ndarray, prefix: str) -> dict:
     )
 
     return {
-        f'{prefix}length': float(signal.size),
-        f'{prefix}mean': mean_value,
-        f'{prefix}median': float(np.median(signal)),
-        f'{prefix}std': std_value,
-        f'{prefix}range': float(np.ptp(signal)), # peak-to-peak range
-        f'{prefix}iqr': iqr, # interquartile range
-        f'{prefix}cv': cv, # coefficient of variation
-        f'{prefix}rms': float(np.sqrt(np.mean(signal ** 2))),
-        f'{prefix}abs_mean': float(np.mean(np.abs(signal))),
-        f'{prefix}skew': skewness,
-        f'{prefix}kurtosis': kurtosis,
-        f'{prefix}mean_crossing_count': mean_crossing_count,
+        f'{prefix}ppg_length': float(signal.size),
+        f'{prefix}ppg_mean': mean_value,
+        f'{prefix}ppg_median': float(np.median(signal)),
+        f'{prefix}ppg_std': std_value,
+        f'{prefix}ppg_range': float(np.ptp(signal)), # peak-to-peak range
+        f'{prefix}ppg_iqr': iqr, # interquartile range
+        f'{prefix}ppg_cv': cv, # coefficient of variation
+        f'{prefix}ppg_rms': float(np.sqrt(np.mean(signal ** 2))),
+        f'{prefix}ppg_abs_mean': float(np.mean(np.abs(signal))),
+        f'{prefix}ppg_skew': skewness,
+        f'{prefix}ppg_kurtosis': kurtosis,
+        f'{prefix}ppg_mean_crossing_count': mean_crossing_count,
     }
 
 
-def _pulse_features(signal: np.ndarray) -> dict:
+def _pulse_features(signal: np.ndarray, prefix: str) -> dict:
     baseline_window = max(5, signal.size // 20)
     baseline = _moving_average(signal, baseline_window) # direct current
     ac = signal - baseline # alternating current
@@ -150,17 +150,17 @@ def _pulse_features(signal: np.ndarray) -> dict:
 
     if peaks.size < 2:
         return {
-            'ppg_peak_count': float(peaks.size),
-            'ppg_beat_density': 0.0,
-            'ppg_ibi_mean': 0.0,
-            'ppg_ibi_std': 0.0,
-            'ppg_ibi_rmssd': 0.0,
-            'ppg_peak_amp_mean': 0.0,
-            'ppg_peak_amp_std': 0.0,
-            'ppg_peak_amp_cv': 0.0,
-            'ppg_max_slope': 0.0,
-            'ppg_mean_rise_slope': 0.0,
-            'ppg_perfusion_index': 0.0
+            f'{prefix}ppg_peak_count': float(peaks.size),
+            f'{prefix}ppg_beat_density': 0.0,
+            f'{prefix}ppg_ibi_mean': 0.0,
+            f'{prefix}ppg_ibi_std': 0.0,
+            f'{prefix}ppg_ibi_rmssd': 0.0,
+            f'{prefix}ppg_peak_amp_mean': 0.0,
+            f'{prefix}ppg_peak_amp_std': 0.0,
+            f'{prefix}ppg_peak_amp_cv': 0.0,
+            f'{prefix}ppg_max_slope': 0.0,
+            f'{prefix}ppg_mean_rise_slope': 0.0,
+            f'{prefix}ppg_perfusion_index': 0.0
         }
 
     ibi = np.diff(peaks).astype(float)
@@ -181,29 +181,29 @@ def _pulse_features(signal: np.ndarray) -> dict:
     perfusion_index = float(ac_std / dc_mean) if dc_mean > 1e-8 else 0.0
 
     return {
-        'ppg_peak_count': float(peaks.size),
-        'ppg_beat_density': float(peaks.size / signal.size),
-        'ppg_ibi_mean': float(np.mean(ibi)),
-        'ppg_ibi_std': float(np.std(ibi)),
-        'ppg_ibi_rmssd': _rmssd(ibi),
-        'ppg_peak_amp_mean': amp_mean,
-        'ppg_peak_amp_std': amp_std,
-        'ppg_peak_amp_cv': amp_cv,
-        'ppg_max_slope': float(np.max(np.abs(np.diff(ac)))) if ac.size > 1 else 0.0,
-        'ppg_mean_rise_slope': float(np.mean(rise_slopes)) if rise_slopes else 0.0,
-        'ppg_perfusion_index': perfusion_index
+        f'{prefix}ppg_peak_count': float(peaks.size),
+        f'{prefix}ppg_beat_density': float(peaks.size / signal.size),
+        f'{prefix}ppg_ibi_mean': float(np.mean(ibi)),
+        f'{prefix}ppg_ibi_std': float(np.std(ibi)),
+        f'{prefix}ppg_ibi_rmssd': _rmssd(ibi),
+        f'{prefix}ppg_peak_amp_mean': amp_mean,
+        f'{prefix}ppg_peak_amp_std': amp_std,
+        f'{prefix}ppg_peak_amp_cv': amp_cv,
+        f'{prefix}ppg_max_slope': float(np.max(np.abs(np.diff(ac)))) if ac.size > 1 else 0.0,
+        f'{prefix}ppg_mean_rise_slope': float(np.mean(rise_slopes)) if rise_slopes else 0.0,
+        f'{prefix}ppg_perfusion_index': perfusion_index
     }
 
 
-def _frequency_domain_features(signal: np.ndarray) -> dict:
+def _frequency_domain_features(signal: np.ndarray, prefix: str) -> dict:
     if signal.size < 16:
         return {
-            'ppg_dominant_frequency': 0.0,
-            'ppg_spectral_entropy': 0.0,
-            'ppg_band_power_low': 0.0,
-            'ppg_band_power_mid': 0.0,
-            'ppg_band_power_high': 0.0,
-            'ppg_snr': 0.0,
+            f'{prefix}ppg_dominant_frequency': 0.0,
+            f'{prefix}ppg_spectral_entropy': 0.0,
+            f'{prefix}ppg_band_power_low': 0.0,
+            f'{prefix}ppg_band_power_mid': 0.0,
+            f'{prefix}ppg_band_power_high': 0.0,
+            f'{prefix}ppg_snr': 0.0,
         }
 
     centered = signal - np.mean(signal)
@@ -213,12 +213,12 @@ def _frequency_domain_features(signal: np.ndarray) -> dict:
     total_power = float(np.sum(spectrum))
     if total_power <= 1e-12:
         return {
-            'ppg_dominant_frequency': 0.0,
-            'ppg_spectral_entropy': 0.0,
-            'ppg_band_power_low': 0.0,
-            'ppg_band_power_mid': 0.0,
-            'ppg_band_power_high': 0.0,
-            'ppg_snr': 0.0,
+            f'{prefix}ppg_dominant_frequency': 0.0,
+            f'{prefix}ppg_spectral_entropy': 0.0,
+            f'{prefix}ppg_band_power_low': 0.0,
+            f'{prefix}ppg_band_power_mid': 0.0,
+            f'{prefix}ppg_band_power_high': 0.0,
+            f'{prefix}ppg_snr': 0.0,
         }
 
     norm_spectrum = spectrum / total_power
@@ -239,21 +239,21 @@ def _frequency_domain_features(signal: np.ndarray) -> dict:
         snr = 0.0
 
     return {
-        'ppg_dominant_frequency': dominant_frequency,
-        'ppg_spectral_entropy': entropy,
-        'ppg_band_power_low': low,
-        'ppg_band_power_mid': mid,
-        'ppg_band_power_high': high,
-        'ppg_snr': snr,
+        f'{prefix}ppg_dominant_frequency': dominant_frequency,
+        f'{prefix}ppg_spectral_entropy': entropy,
+        f'{prefix}ppg_band_power_low': low,
+        f'{prefix}ppg_band_power_mid': mid,
+        f'{prefix}ppg_band_power_high': high,
+        f'{prefix}ppg_snr': snr,
     }
 
 
-def _periodic_features(signal: np.ndarray) -> dict:
+def _periodic_features(signal: np.ndarray, prefix: str) -> dict:
     if signal.size < 8:
         return {
-            'ppg_autocorr_peak_lag': 0.0,
-            'ppg_autocorr_peak_val': 0.0,
-            'ppg_heart_rate_bpm': 0.0,
+            f'{prefix}ppg_autocorr_peak_lag': 0.0,
+            f'{prefix}ppg_autocorr_peak_val': 0.0,
+            f'{prefix}ppg_heart_rate_bpm': 0.0,
         }
 
     centered = signal - np.mean(signal)
@@ -261,9 +261,9 @@ def _periodic_features(signal: np.ndarray) -> dict:
     autocorr = autocorr[autocorr.size // 2 :]
     if autocorr[0] <= 0:
         return {
-            'ppg_autocorr_peak_lag': 0.0,
-            'ppg_autocorr_peak_val': 0.0,
-            'ppg_heart_rate_bpm': 0.0,
+            f'{prefix}ppg_autocorr_peak_lag': 0.0,
+            f'{prefix}ppg_autocorr_peak_val': 0.0,
+            f'{prefix}ppg_heart_rate_bpm': 0.0,
         }
 
     autocorr = autocorr / autocorr[0]
@@ -272,9 +272,9 @@ def _periodic_features(signal: np.ndarray) -> dict:
     search = autocorr[min_lag:max_lag]
     if search.size == 0:
         return {
-            'ppg_autocorr_peak_lag': 0.0,
-            'ppg_autocorr_peak_val': 0.0,
-            'ppg_heart_rate_bpm': 0.0,
+            f'{prefix}ppg_autocorr_peak_lag': 0.0,
+            f'{prefix}ppg_autocorr_peak_val': 0.0,
+            f'{prefix}ppg_heart_rate_bpm': 0.0,
         }
 
     peak_lag = float(min_lag + int(np.argmax(search)))
@@ -282,30 +282,30 @@ def _periodic_features(signal: np.ndarray) -> dict:
     fs = 100.0 # assuming 100 Hz sampling frequency
     heart_rate_bpm = float(60.0 * fs / peak_lag) if peak_lag > 0 else 0.0
     return {
-        'ppg_autocorr_peak_lag': peak_lag,
-        'ppg_autocorr_peak_val': peak_val,
-        'ppg_heart_rate_bpm': heart_rate_bpm,
+        f'{prefix}ppg_autocorr_peak_lag': peak_lag,
+        f'{prefix}ppg_autocorr_peak_val': peak_val,
+        f'{prefix}ppg_heart_rate_bpm': heart_rate_bpm,
     }
 
 
-def _derivative_features(signal: np.ndarray) -> dict:
+def _derivative_features(signal: np.ndarray, prefix: str) -> dict:
     diff1 = np.diff(signal)
     diff2 = np.diff(diff1) if diff1.size > 1 else np.empty(0, dtype=float)
     return {
         'ppg_diff1_mean': float(np.mean(np.abs(diff1))) if diff1.size else 0.0,
-        'ppg_diff1_std': float(np.std(diff1)) if diff1.size else 0.0,
-        'ppg_diff2_mean': float(np.mean(np.abs(diff2))) if diff2.size else 0.0,
-        'ppg_diff2_std': float(np.std(diff2)) if diff2.size else 0.0,
+        f'{prefix}ppg_diff1_std': float(np.std(diff1)) if diff1.size else 0.0,
+        f'{prefix}ppg_diff2_mean': float(np.mean(np.abs(diff2))) if diff2.size else 0.0,
+        f'{prefix}ppg_diff2_std': float(np.std(diff2)) if diff2.size else 0.0,
     }
 
 
-def _segment_features(signal: np.ndarray) -> dict:
+def _segment_features(signal: np.ndarray, prefix: str) -> dict:
     midpoint = signal.size // 2
     if midpoint == 0:
         return {
-            'ppg_half_mean_diff': 0.0,
-            'ppg_half_std_ratio': 0.0,
-            'ppg_edge_mean_diff': 0.0,
+            f'{prefix}ppg_half_mean_diff': 0.0,
+            f'{prefix}ppg_half_std_ratio': 0.0,
+            f'{prefix}ppg_edge_mean_diff': 0.0,
         }
 
     first_half = signal[:midpoint]
@@ -319,9 +319,9 @@ def _segment_features(signal: np.ndarray) -> dict:
         else 0.0
     )
     return {
-        'ppg_half_mean_diff': float(np.mean(second_half) - np.mean(first_half)),
-        'ppg_half_std_ratio': half_std_ratio,
-        'ppg_edge_mean_diff': float(end_mean - start_mean),
+        f'{prefix}ppg_half_mean_diff': float(np.mean(second_half) - np.mean(first_half)),
+        f'{prefix}ppg_half_std_ratio': half_std_ratio,
+        f'{prefix}ppg_edge_mean_diff': float(end_mean - start_mean),
     }
 
 
@@ -332,12 +332,12 @@ def extract_ppg_features(signal: np.ndarray) -> dict:
         raise ValueError('empty signal')
 
     features = {}
-    features.update(_distribution_features(signal, prefix='ppg_'))
-    features.update(_derivative_features(signal))
-    features.update(_pulse_features(signal))
-    features.update(_frequency_domain_features(signal))
-    features.update(_periodic_features(signal))
-    features.update(_segment_features(signal))
+    features.update(_distribution_features(signal, prefix='[1]'))
+    features.update(_derivative_features(signal, prefix='[2]'))
+    features.update(_pulse_features(signal, prefix='[3]'))
+    features.update(_frequency_domain_features(signal, prefix='[4]'))
+    features.update(_periodic_features(signal, prefix='[5]'))
+    features.update(_segment_features(signal, prefix='[6]'))
     return features
 
 
