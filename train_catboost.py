@@ -21,7 +21,7 @@ def build_model(seed: int):
         loss_function='MAE',#'RMSE',
         iterations=400,
         learning_rate=0.05,
-        depth=4,
+        depth=3,
         subsample=0.9,
         reg_lambda=1.0,
         random_seed=seed,

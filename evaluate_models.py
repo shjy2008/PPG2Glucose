@@ -43,7 +43,7 @@ def build_parser():
         '--models',
         nargs='+',
         choices=AVAILABLE_MODELS,
-        default=['catboost', 'xgb', 'rf', 'svm'],
+        default=['catboost', 'xgb', 'rf'],
         metavar='MODEL',
         help=f'Models to compare. Choices: {", ".join(AVAILABLE_MODELS)}',
     )
