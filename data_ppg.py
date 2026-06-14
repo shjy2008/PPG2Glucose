@@ -120,7 +120,7 @@ def _distribution_features(signal: np.ndarray, prefix: str) -> dict:
     q25, q75 = np.percentile(signal, [25, 75])
     iqr = float(q75 - q25)
     cv = float(std_value / abs(mean_value)) if abs(mean_value) > 1e-8 else 0.0
-    zero_crossings = (
+    mean_crossing_count = (
         float(np.sum(centered[:-1] * centered[1:] < 0)) if signal.size > 1 else 0.0
     )
 
@@ -129,21 +129,21 @@ def _distribution_features(signal: np.ndarray, prefix: str) -> dict:
         f'{prefix}mean': mean_value,
         f'{prefix}median': float(np.median(signal)),
         f'{prefix}std': std_value,
-        f'{prefix}range': float(np.ptp(signal)),
-        f'{prefix}iqr': iqr,
-        f'{prefix}cv': cv,
+        f'{prefix}range': float(np.ptp(signal)), # peak-to-peak range
+        f'{prefix}iqr': iqr, # interquartile range
+        f'{prefix}cv': cv, # coefficient of variation
         f'{prefix}rms': float(np.sqrt(np.mean(signal ** 2))),
         f'{prefix}abs_mean': float(np.mean(np.abs(signal))),
         f'{prefix}skew': skewness,
         f'{prefix}kurtosis': kurtosis,
-        f'{prefix}zero_crossings': zero_crossings,
+        f'{prefix}mean_crossing_count': mean_crossing_count,
     }
 
 
 def _pulse_features(signal: np.ndarray) -> dict:
     baseline_window = max(5, signal.size // 20)
-    baseline = _moving_average(signal, baseline_window)
-    ac = signal - baseline
+    baseline = _moving_average(signal, baseline_window) # direct current
+    ac = signal - baseline # alternating current
 
     min_distance = max(3, signal.size // 120)
     peaks = _find_peaks(ac, min_distance=min_distance)
@@ -193,14 +193,14 @@ def _pulse_features(signal: np.ndarray) -> dict:
         'ppg_max_slope': float(np.max(np.abs(np.diff(ac)))) if ac.size > 1 else 0.0,
         'ppg_mean_rise_slope': float(np.mean(rise_slopes)) if rise_slopes else 0.0,
         'ppg_perfusion_index': perfusion_index,
-        'ppg_ac_dc_ratio': perfusion_index,
+        # 'ppg_ac_dc_ratio': perfusion_index,
     }
 
 
-def _spectral_features(signal: np.ndarray) -> dict:
+def _frequency_domain_features(signal: np.ndarray) -> dict:
     if signal.size < 16:
         return {
-            'ppg_dom_freq': 0.0,
+            'ppg_dominant_frequency': 0.0,
             'ppg_spectral_entropy': 0.0,
             'ppg_band_power_low': 0.0,
             'ppg_band_power_mid': 0.0,
@@ -210,11 +210,12 @@ def _spectral_features(signal: np.ndarray) -> dict:
 
     centered = signal - np.mean(signal)
     spectrum = np.abs(np.fft.rfft(centered)) ** 2
-    freqs = np.fft.rfftfreq(centered.size, d=1.0)
+    fs = 100 # sampling frequency, assume 100 Hz for now
+    freqs = np.fft.rfftfreq(centered.size, d=1.0/fs)
     total_power = float(np.sum(spectrum))
     if total_power <= 1e-12:
         return {
-            'ppg_dom_freq': 0.0,
+            'ppg_dominant_frequency': 0.0,
             'ppg_spectral_entropy': 0.0,
             'ppg_band_power_low': 0.0,
             'ppg_band_power_mid': 0.0,
@@ -223,7 +224,7 @@ def _spectral_features(signal: np.ndarray) -> dict:
         }
 
     norm_spectrum = spectrum / total_power
-    dom_freq = float(freqs[int(np.argmax(spectrum[1:])) + 1]) if spectrum.size > 1 else 0.0
+    dominant_frequency = float(freqs[int(np.argmax(spectrum[1:])) + 1]) if spectrum.size > 1 else 0.0
     entropy = float(-np.sum(norm_spectrum[norm_spectrum > 1e-12] * np.log(norm_spectrum[norm_spectrum > 1e-12])))
 
     low = float(np.sum(spectrum[freqs <= 0.05]) / total_power)
@@ -240,7 +241,7 @@ def _spectral_features(signal: np.ndarray) -> dict:
         snr = 0.0
 
     return {
-        'ppg_dom_freq': dom_freq,
+        'ppg_dominant_frequency': dominant_frequency,
         'ppg_spectral_entropy': entropy,
         'ppg_band_power_low': low,
         'ppg_band_power_mid': mid,
@@ -249,12 +250,12 @@ def _spectral_features(signal: np.ndarray) -> dict:
     }
 
 
-def _autocorr_features(signal: np.ndarray) -> dict:
+def _periodic_features(signal: np.ndarray) -> dict:
     if signal.size < 8:
         return {
             'ppg_autocorr_peak_lag': 0.0,
             'ppg_autocorr_peak_val': 0.0,
-            'ppg_pulse_rate': 0.0,
+            'ppg_heart_rate_bpm': 0.0,
         }
 
     centered = signal - np.mean(signal)
@@ -264,7 +265,7 @@ def _autocorr_features(signal: np.ndarray) -> dict:
         return {
             'ppg_autocorr_peak_lag': 0.0,
             'ppg_autocorr_peak_val': 0.0,
-            'ppg_pulse_rate': 0.0,
+            'ppg_heart_rate_bpm': 0.0,
         }
 
     autocorr = autocorr / autocorr[0]
@@ -275,16 +276,17 @@ def _autocorr_features(signal: np.ndarray) -> dict:
         return {
             'ppg_autocorr_peak_lag': 0.0,
             'ppg_autocorr_peak_val': 0.0,
-            'ppg_pulse_rate': 0.0,
+            'ppg_heart_rate_bpm': 0.0,
         }
 
     peak_lag = float(min_lag + int(np.argmax(search)))
     peak_val = float(autocorr[int(peak_lag)])
-    pulse_rate = float(1.0 / peak_lag) if peak_lag > 0 else 0.0
+    fs = 100.0 # assuming 100 Hz sampling frequency
+    heart_rate_bpm = float(60.0 * fs / peak_lag) if peak_lag > 0 else 0.0
     return {
         'ppg_autocorr_peak_lag': peak_lag,
         'ppg_autocorr_peak_val': peak_val,
-        'ppg_pulse_rate': pulse_rate,
+        'ppg_heart_rate_bpm': heart_rate_bpm,
     }
 
 
@@ -292,8 +294,8 @@ def _derivative_features(signal: np.ndarray) -> dict:
     diff1 = np.diff(signal)
     diff2 = np.diff(diff1) if diff1.size > 1 else np.empty(0, dtype=float)
     return {
-        'ppg_diff_mean': float(np.mean(np.abs(diff1))) if diff1.size else 0.0,
-        'ppg_diff_std': float(np.std(diff1)) if diff1.size else 0.0,
+        'ppg_diff1_mean': float(np.mean(np.abs(diff1))) if diff1.size else 0.0,
+        'ppg_diff1_std': float(np.std(diff1)) if diff1.size else 0.0,
         'ppg_diff2_mean': float(np.mean(np.abs(diff2))) if diff2.size else 0.0,
         'ppg_diff2_std': float(np.std(diff2)) if diff2.size else 0.0,
     }
@@ -335,8 +337,8 @@ def extract_ppg_features(signal: np.ndarray) -> dict:
     features.update(_distribution_features(signal, prefix='ppg_'))
     features.update(_derivative_features(signal))
     features.update(_pulse_features(signal))
-    features.update(_spectral_features(signal))
-    features.update(_autocorr_features(signal))
+    features.update(_frequency_domain_features(signal))
+    features.update(_periodic_features(signal))
     features.update(_segment_features(signal))
     return features
 
