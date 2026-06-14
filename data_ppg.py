@@ -160,8 +160,7 @@ def _pulse_features(signal: np.ndarray) -> dict:
             'ppg_peak_amp_cv': 0.0,
             'ppg_max_slope': 0.0,
             'ppg_mean_rise_slope': 0.0,
-            'ppg_perfusion_index': 0.0,
-            'ppg_ac_dc_ratio': 0.0,
+            'ppg_perfusion_index': 0.0
         }
 
     ibi = np.diff(peaks).astype(float)
@@ -192,8 +191,7 @@ def _pulse_features(signal: np.ndarray) -> dict:
         'ppg_peak_amp_cv': amp_cv,
         'ppg_max_slope': float(np.max(np.abs(np.diff(ac)))) if ac.size > 1 else 0.0,
         'ppg_mean_rise_slope': float(np.mean(rise_slopes)) if rise_slopes else 0.0,
-        'ppg_perfusion_index': perfusion_index,
-        # 'ppg_ac_dc_ratio': perfusion_index,
+        'ppg_perfusion_index': perfusion_index
     }
 
 

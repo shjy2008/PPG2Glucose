@@ -20,9 +20,6 @@ AVAILABLE_MODELS = (
     'randomtree',
 )
 
-DEFAULT_SEEDS = (42, 52, 62, 72, 82)
-
-
 def build_parser():
     p = argparse.ArgumentParser(
         description=(
@@ -36,7 +33,7 @@ def build_parser():
         '--seeds',
         type=int,
         nargs='+',
-        default=list(DEFAULT_SEEDS),
+        default=list(utils.DEFAULT_SEEDS),
         help='Random seeds for fold shuffling (default: 42 52 62 72 82)',
     )
     p.add_argument(
