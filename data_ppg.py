@@ -292,7 +292,7 @@ def _derivative_features(signal: np.ndarray, prefix: str) -> dict:
     diff1 = np.diff(signal)
     diff2 = np.diff(diff1) if diff1.size > 1 else np.empty(0, dtype=float)
     return {
-        'ppg_diff1_mean': float(np.mean(np.abs(diff1))) if diff1.size else 0.0,
+        f'{prefix}ppg_diff1_mean': float(np.mean(np.abs(diff1))) if diff1.size else 0.0,
         f'{prefix}ppg_diff1_std': float(np.std(diff1)) if diff1.size else 0.0,
         f'{prefix}ppg_diff2_mean': float(np.mean(np.abs(diff2))) if diff2.size else 0.0,
         f'{prefix}ppg_diff2_std': float(np.std(diff2)) if diff2.size else 0.0,
@@ -332,12 +332,12 @@ def extract_ppg_features(signal: np.ndarray) -> dict:
         raise ValueError('empty signal')
 
     features = {}
-    features.update(_distribution_features(signal, prefix='[1]'))
-    features.update(_derivative_features(signal, prefix='[2]'))
-    features.update(_pulse_features(signal, prefix='[3]'))
-    features.update(_frequency_domain_features(signal, prefix='[4]'))
-    features.update(_periodic_features(signal, prefix='[5]'))
-    features.update(_segment_features(signal, prefix='[6]'))
+    features.update(_distribution_features(signal, prefix='g1_'))
+    features.update(_derivative_features(signal, prefix='g2_'))
+    features.update(_pulse_features(signal, prefix='g3_'))
+    features.update(_frequency_domain_features(signal, prefix='g4_'))
+    features.update(_periodic_features(signal, prefix='g5_'))
+    features.update(_segment_features(signal, prefix='g6_'))
     return features
 
 
