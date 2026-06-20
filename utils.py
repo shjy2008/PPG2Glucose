@@ -224,6 +224,12 @@ def run_repeated_kfold_comparison(
     return fold_metrics_by_model, summary_df
 
 
+def _top_feature_indices(model, n_features: int, top_n: int) -> np.ndarray:
+    importances = np.asarray(model.feature_importances_, dtype=float)
+    ranked = np.argsort(importances)[::-1]
+    return ranked[: min(top_n, n_features)]
+
+
 def run_repeated_kfold_training(
     X: pd.DataFrame,
     y: pd.Series,
@@ -232,6 +238,7 @@ def run_repeated_kfold_training(
     model_name: str = 'model',
     n_splits: int = 5,
     seeds: Sequence[int] = DEFAULT_SEEDS,
+    select_top_n: Optional[int] = None,
     verbose: bool = True,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
     """Repeated k-fold CV for one model: metrics and feature importances.
@@ -239,9 +246,13 @@ def run_repeated_kfold_training(
     Uses the same fold splits, imputation, and seed handling as
     run_repeated_kfold_comparison. Each fold fit contributes one validation
     score and one normalized feature-importance vector.
+
+    When select_top_n is set, feature ranking is fit on each training fold
+    only (no validation leakage), then the model is refit on those columns.
     """
     X, y = _prepare_xy(X, y)
     accum = np.zeros(len(feature_names), dtype=float)
+    selection_counts = np.zeros(len(feature_names), dtype=int)
     fold_metrics: list[dict] = []
     n_runs = 0
 
@@ -259,6 +270,8 @@ def run_repeated_kfold_training(
             f'\nRepeated CV: {n_splits}-fold × {len(seeds)} seeds '
             f'= {total_runs} evaluations'
         )
+        if select_top_n is not None:
+            print(f'Feature selection: top {select_top_n} per fold (train-only ranking)')
         print(f'Seeds: {list(seeds)}\n')
 
     for seed_index, seed in enumerate(seeds, start=1):
@@ -267,22 +280,39 @@ def run_repeated_kfold_training(
             print(f'--- Seed {seed} ({seed_index}/{len(seeds)}) ---')
 
         for fold_index, (train_index, val_index) in enumerate(cv.split(X, y), start=1):
-            model = model_factory(seed)
             X_train = X.iloc[train_index]
             y_train = y.iloc[train_index]
             X_val = X.iloc[val_index]
             y_val = y.iloc[val_index]
             X_train, X_val, _ = _impute_features(X_train, X_val)
-            model.fit(X_train, y_train)
 
-            predictions = model.predict(X_val)
+            if select_top_n is not None:
+                selector = model_factory(seed)
+                selector.fit(X_train, y_train)
+                selected_idx = _top_feature_indices(selector, X_train.shape[1], select_top_n)
+                selected_columns = X_train.columns[selected_idx]
+                selection_counts[selected_idx] += 1
+
+                model = model_factory(seed)
+                model.fit(X_train[selected_columns], y_train)
+                predictions = model.predict(X_val[selected_columns])
+                importances = np.zeros(len(feature_names), dtype=float)
+                fold_importances = np.asarray(model.feature_importances_, dtype=float)
+                total = fold_importances.sum()
+                if total > 0:
+                    fold_importances = fold_importances / total
+                importances[selected_idx] = fold_importances
+            else:
+                model = model_factory(seed)
+                model.fit(X_train, y_train)
+                predictions = model.predict(X_val)
+                importances = np.asarray(model.feature_importances_, dtype=float)
+                total = importances.sum()
+                if total > 0:
+                    importances = importances / total
+
             metrics = evaluation.evaluate_regression(y_val.values, predictions)
             fold_metrics.append(metrics)
-
-            importances = np.asarray(model.feature_importances_, dtype=float)
-            total = importances.sum()
-            if total > 0:
-                importances = importances / total
             accum += importances
             n_runs += 1
 
@@ -313,6 +343,25 @@ def run_repeated_kfold_training(
     if verbose:
         print('\n=== Repeated cross-validation summary (mean ± std) ===')
         print_comparison_table(summary_df)
+        if select_top_n is not None:
+            freq = pd.DataFrame({
+                'feature': list(feature_names),
+                'selected_in_folds': selection_counts,
+            })
+            freq['selection_rate'] = freq['selected_in_folds'] / n_runs
+            freq = freq.sort_values(
+                ['selected_in_folds', 'feature'],
+                ascending=[False, True],
+            ).reset_index(drop=True)
+            print(
+                f'\nMost frequently selected features '
+                f'(top {select_top_n} per fold, {n_runs} fits):'
+            )
+            print(
+                freq.head(select_top_n)[['feature', 'selected_in_folds']].to_string(
+                    index=False,
+                )
+            )
 
     return summary_df, importance_df
 

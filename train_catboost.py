@@ -50,6 +50,13 @@ def build_parser():
         default=list(utils.DEFAULT_SEEDS),
         help='Random seeds for fold shuffling (default: 42 52 62 72 82)',
     )
+    p.add_argument(
+        '--select-top',
+        type=int,
+        default=None,
+        metavar='N',
+        help='Keep top N features per fold (ranked on train split only)',
+    )
     p.add_argument('--top', type=int, default=20, help='Number of top features to print')
     return p
 
@@ -80,7 +87,11 @@ def main():
     print(f"Using dataset: {args.dataset}")
     X, y, feature_names = data_loader.split(ds)
     n_evaluations = args.n_splits * len(args.seeds)
-    print(f"Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}, features: {X.shape[1]}")
+    print(
+        f"Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}, "
+        f"features: {X.shape[1]}"
+        + (f' (using top {args.select_top} per fold)' if args.select_top else '')
+    )
 
     params = load_params(args.params)
     if args.params:
@@ -94,10 +105,25 @@ def main():
         model_name='catboost',
         n_splits=args.n_splits,
         seeds=args.seeds,
+        select_top_n=args.select_top,
     )
-    top = fi.head(args.top)[['feature']].copy()
-    top['%'] = 100.0 * fi.head(args.top)['importance'].to_numpy()
-    print(f'\nTop {args.top} features (mean % importance over {n_evaluations} fits):')
+    if args.select_top is not None:
+        # Importance is averaged over all folds; unselected features get 0 for that
+        # fold, so many distinct features can appear across folds. Show only those
+        # that were ever used (non-zero mean importance).
+        fi_used = fi[fi['importance'] > 0].reset_index(drop=True)
+        n_print = min(args.top, len(fi_used))
+        top = fi_used.head(n_print)[['feature']].copy()
+        top['%'] = 100.0 * fi_used.head(n_print)['importance'].to_numpy()
+        print(
+            f'\nTop {n_print} features by mean importance when selected '
+            f'({n_evaluations} fits, top {args.select_top} per fold; '
+            f'{len(fi_used)} unique features used across folds):'
+        )
+    else:
+        top = fi.head(args.top)[['feature']].copy()
+        top['%'] = 100.0 * fi.head(args.top)['importance'].to_numpy()
+        print(f'\nTop {args.top} features (mean % importance over {n_evaluations} fits):')
     print(top.to_string(index=False, formatters={'%': '{:.2f}'.format}))
 
 
