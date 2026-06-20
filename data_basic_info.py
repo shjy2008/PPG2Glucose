@@ -61,11 +61,11 @@ def extract_basic_info(row: pd.Series) -> dict:
         return {}
 
     return {
-        'sex': sex,
+        # 'sex': sex,
         'age': age,
         'height': height,
         'weight': weight,
-        # 'bmi': bmi,
+        'bmi': bmi,
         # 'blood_pressure_systolic': systolic,
         # 'blood_pressure_diastolic': diastolic,
         # 'heart_rate': heart_rate,
