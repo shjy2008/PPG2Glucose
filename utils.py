@@ -247,14 +247,15 @@ def run_repeated_kfold_training(
     run_repeated_kfold_comparison. Each fold fit contributes one validation
     score and one normalized feature-importance vector.
 
-    When select_top_n is set, feature ranking is fit on each training fold
-    only (no validation leakage), then the model is refit on those columns.
+    When select_top_n is set (and less than the feature count), feature ranking
+    is fit on each training fold only, then the model is refit on those columns.
     """
     X, y = _prepare_xy(X, y)
     accum = np.zeros(len(feature_names), dtype=float)
     selection_counts = np.zeros(len(feature_names), dtype=int)
     fold_metrics: list[dict] = []
     n_runs = 0
+    use_selection = select_top_n is not None and select_top_n < X.shape[1]
 
     if X.isna().any().any() and verbose:
         nan_columns = X.columns[X.isna().any()].tolist()
@@ -270,7 +271,7 @@ def run_repeated_kfold_training(
             f'\nRepeated CV: {n_splits}-fold × {len(seeds)} seeds '
             f'= {total_runs} evaluations'
         )
-        if select_top_n is not None:
+        if use_selection:
             print(f'Feature selection: top {select_top_n} per fold (train-only ranking)')
         print(f'Seeds: {list(seeds)}\n')
 
@@ -286,7 +287,7 @@ def run_repeated_kfold_training(
             y_val = y.iloc[val_index]
             X_train, X_val, _ = _impute_features(X_train, X_val)
 
-            if select_top_n is not None:
+            if use_selection:
                 selector = model_factory(seed)
                 selector.fit(X_train, y_train)
                 selected_idx = _top_feature_indices(selector, X_train.shape[1], select_top_n)
@@ -343,12 +344,11 @@ def run_repeated_kfold_training(
     if verbose:
         print('\n=== Repeated cross-validation summary (mean ± std) ===')
         print_comparison_table(summary_df)
-        if select_top_n is not None:
+        if use_selection:
             freq = pd.DataFrame({
                 'feature': list(feature_names),
                 'selected_in_folds': selection_counts,
             })
-            freq['selection_rate'] = freq['selected_in_folds'] / n_runs
             freq = freq.sort_values(
                 ['selected_in_folds', 'feature'],
                 ascending=[False, True],

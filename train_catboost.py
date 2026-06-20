@@ -7,14 +7,15 @@ from catboost import CatBoostRegressor
 
 import data_loader
 import utils
+import numpy as np
 from config import catboost_kwargs
 
 DEFAULT_PARAMS = {
-    # 'iterations': 400,
-    # 'learning_rate': 0.05,
-    # 'depth': 3,
-    # 'subsample': 0.9,
-    # 'reg_lambda': 1.0,
+    'iterations': 400,
+    'learning_rate': 0.05,
+    'depth': 3,
+    'subsample': 0.9,
+    'reg_lambda': 1.0,
 
     # 'iterations': 450,
     # 'learning_rate': 0.025629380669206163,
@@ -24,13 +25,13 @@ DEFAULT_PARAMS = {
     # 'min_data_in_leaf': 7,
     # 'border_count': 192,
 
-    'iterations': 500,
-    'learning_rate': 0.025,
-    'depth': 3,
-    'subsample': 0.75,
-    'reg_lambda': 0.15,
-    'min_data_in_leaf': 7,
-    'border_count': 190,
+    # 'iterations': 500,
+    # 'learning_rate': 0.025,
+    # 'depth': 3,
+    # 'subsample': 0.75,
+    # 'reg_lambda': 0.15,
+    # 'min_data_in_leaf': 7,
+    # 'border_count': 190,
 }
 
 
@@ -86,6 +87,14 @@ def main():
     ds = data_loader.load_dataset(args.dataset)
     print(f"Using dataset: {args.dataset}")
     X, y, feature_names = data_loader.split(ds)
+    # ---------------------------------------------------------------------
+    # Outlier handling – remove extreme target values (outside 1st‑99th percentiles)
+    # ---------------------------------------------------------------------
+    lower_q, upper_q = np.quantile(y, [0.01, 0.99])
+    mask = (y >= lower_q) & (y <= upper_q)
+    X = X[mask]
+    y = y[mask]
+    feature_names = list(X.columns)
     n_evaluations = args.n_splits * len(args.seeds)
     print(
         f"Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}, "
@@ -96,6 +105,18 @@ def main():
     params = load_params(args.params)
     if args.params:
         print(f'Using hyperparameters from {args.params}')
+
+    def train_and_predict(seed):
+        model = build_model(seed, params)
+        model.fit(X, y)
+        return model.predict(X)
+
+    all_preds = []
+    for seed in args.seeds:
+        all_preds.append(train_and_predict(seed))
+    training_pred = np.mean(np.column_stack(all_preds), axis=1)
+    mae = np.mean(np.abs(training_pred - y))
+    print(f"Training MAE: {mae:.4f} mmol/L")
 
     _, fi = utils.run_repeated_kfold_training(
         X,
@@ -108,9 +129,6 @@ def main():
         select_top_n=args.select_top,
     )
     if args.select_top is not None:
-        # Importance is averaged over all folds; unselected features get 0 for that
-        # fold, so many distinct features can appear across folds. Show only those
-        # that were ever used (non-zero mean importance).
         fi_used = fi[fi['importance'] > 0].reset_index(drop=True)
         n_print = min(args.top, len(fi_used))
         top = fi_used.head(n_print)[['feature']].copy()

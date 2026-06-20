@@ -32,7 +32,7 @@ def print_target_stats(y: np.ndarray) -> None:
     print(f"variance: {stats['variance']:.4f} (mmol/L)²")
     print(f"std:      {stats['std']:.4f}")
     print(f"(Mean predictor baseline RMSE ≈ {stats['std']:.4f} mmol/L)")
-    print('\n----------------------------------\n')
+    print('----------------------------------\n')
 
 
 def evaluate_regression(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
