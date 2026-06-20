@@ -50,7 +50,7 @@ def build_parser():
         default=list(utils.DEFAULT_SEEDS),
         help='Random seeds for fold shuffling (default: 42 52 62 72 82)',
     )
-    p.add_argument('--top', type=int, default=10, help='Number of top features to print')
+    p.add_argument('--top', type=int, default=20, help='Number of top features to print')
     return p
 
 
@@ -80,7 +80,7 @@ def main():
     print(f"Using dataset: {args.dataset}")
     X, y, feature_names = data_loader.split(ds)
     n_evaluations = args.n_splits * len(args.seeds)
-    print(f"Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}")
+    print(f"Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}, features: {X.shape[1]}")
 
     params = load_params(args.params)
     if args.params:
