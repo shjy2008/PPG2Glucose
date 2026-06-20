@@ -1,4 +1,7 @@
 import argparse
+import json
+from pathlib import Path
+from typing import Optional
 
 from catboost import CatBoostRegressor
 
@@ -6,10 +9,39 @@ import data_loader
 import utils
 from config import catboost_kwargs
 
+DEFAULT_PARAMS = {
+    # 'iterations': 400,
+    # 'learning_rate': 0.05,
+    # 'depth': 3,
+    # 'subsample': 0.9,
+    # 'reg_lambda': 1.0,
+
+    # 'iterations': 450,
+    # 'learning_rate': 0.025629380669206163,
+    # 'depth': 3,
+    # 'subsample': 0.7318547877163166,
+    # 'reg_lambda': 0.1617396356788761,
+    # 'min_data_in_leaf': 7,
+    # 'border_count': 192,
+
+    'iterations': 500,
+    'learning_rate': 0.025,
+    'depth': 3,
+    'subsample': 0.75,
+    'reg_lambda': 0.15,
+    'min_data_in_leaf': 7,
+    'border_count': 190,
+}
+
 
 def build_parser():
     p = argparse.ArgumentParser()
     p.add_argument('--dataset', default='southwest', help='southwest or kaggle')
+    p.add_argument(
+        '--params',
+        default=None,
+        help='JSON file with tuned hyperparameters (e.g. results/catboost_best_params.json)',
+    )
     p.add_argument('--n-splits', type=int, default=5)
     p.add_argument(
         '--seeds',
@@ -22,16 +54,22 @@ def build_parser():
     return p
 
 
-def build_model(seed: int):
+def load_params(path: Optional[str] = None) -> dict:
+    if path is None:
+        return dict(DEFAULT_PARAMS)
+    payload = json.loads(Path(path).read_text())
+    if 'params' in payload:
+        return dict(payload['params'])
+    return dict(payload)
+
+
+def build_model(seed: int, params: Optional[dict] = None):
+    model_params = dict(DEFAULT_PARAMS if params is None else params)
     return CatBoostRegressor(
-        loss_function='MAE',#'RMSE',
-        iterations=400,
-        learning_rate=0.05,
-        depth=3,
-        subsample=0.9,
-        reg_lambda=1.0,
+        loss_function='MAE',
         random_seed=seed,
         verbose=False,
+        **model_params,
         **catboost_kwargs(),
     )
 
@@ -44,11 +82,15 @@ def main():
     n_evaluations = args.n_splits * len(args.seeds)
     print(f"Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}")
 
+    params = load_params(args.params)
+    if args.params:
+        print(f'Using hyperparameters from {args.params}')
+
     _, fi = utils.run_repeated_kfold_training(
         X,
         y,
         feature_names,
-        model_factory=build_model,
+        model_factory=lambda seed: build_model(seed, params),
         model_name='catboost',
         n_splits=args.n_splits,
         seeds=args.seeds,
