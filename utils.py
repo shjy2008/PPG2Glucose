@@ -7,18 +7,10 @@ from sklearn.impute import SimpleImputer
 from sklearn.model_selection import KFold
 
 import evaluation
+from config import DEFAULT_SEEDS, TARGET_OUTLIER_LOWER_Q, TARGET_OUTLIER_UPPER_Q
 
 # Labels store glucose in mg/dL; convert to mmol/L for modeling and reporting.
 MG_DL_TO_MMOL_L = 1.0 / 18.0
-
-# Shared default for repeated k-fold CV (5-fold x 5 seeds = 25 evaluations).
-DEFAULT_SEEDS = (42, 52, 62, 72, 82)
-
-# Drop glucose targets outside this quantile range (mmol/L).
-# TARGET_OUTLIER_LOWER_Q = 0
-# TARGET_OUTLIER_UPPER_Q = 1
-TARGET_OUTLIER_LOWER_Q = 0.01
-TARGET_OUTLIER_UPPER_Q = 0.99
 
 
 def mg_dl_to_mmol_l(value: float) -> float:

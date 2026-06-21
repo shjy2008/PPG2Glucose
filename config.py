@@ -7,6 +7,15 @@ BASIC_FEATURE_KEYS = ('age', 'bmi')
 # BASIC_FEATURE_KEYS = ('sex', 'age', 'height', 'weight')
 # BASIC_FEATURE_KEYS = ('age', 'height', 'weight', 'bmi')
 
+# Shared default for repeated k-fold CV (5-fold x 5 seeds = 25 evaluations).
+DEFAULT_SEEDS = (42, 52, 62, 72, 82)
+
+# Drop glucose targets outside this quantile range (mmol/L).
+TARGET_OUTLIER_LOWER_Q = 0
+TARGET_OUTLIER_UPPER_Q = 1
+# TARGET_OUTLIER_LOWER_Q = 0.01
+# TARGET_OUTLIER_UPPER_Q = 0.99
+
 def catboost_kwargs() -> dict:
     if USE_GPU:
         # GPU uses Bayesian bootstrap by default, which rejects subsample.
