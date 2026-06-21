@@ -2,6 +2,10 @@
 
 USE_GPU = False
 
+# Edit this list for tabular ML, CNN, LSTM, etc.
+BASIC_FEATURE_KEYS = ('age', 'bmi')
+# BASIC_FEATURE_KEYS = ('sex', 'age', 'height', 'weight')
+# BASIC_FEATURE_KEYS = ('age', 'height', 'weight', 'bmi')
 
 def catboost_kwargs() -> dict:
     if USE_GPU:
@@ -34,3 +38,15 @@ def torch_device():
     if USE_GPU and torch.cuda.is_available():
         return torch.device('cuda')
     return torch.device('cpu')
+
+
+def torch_float_tensor(array):
+    import torch
+
+    return torch.tensor(array, dtype=torch.float32)
+
+
+def tensor_to_numpy(tensor):
+    import numpy as np
+
+    return np.asarray(tensor.detach().cpu().tolist(), dtype=np.float32)

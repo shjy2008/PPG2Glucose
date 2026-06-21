@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 import evaluation
 import data_loader
-from config import torch_device
+from config import tensor_to_numpy, torch_device, torch_float_tensor
 
 
 def build_parser():
@@ -27,16 +27,6 @@ def build_parser():
     return p
 
 
-def build_model_inputs(
-    signals: np.ndarray,
-    demographics: np.ndarray,
-    include_basic: bool,
-) -> np.ndarray:
-    if include_basic and demographics.size:
-        return np.concatenate([signals, demographics], axis=1)
-    return signals
-
-
 def standardize_train_test(X_train: np.ndarray, X_test: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     mean = X_train.mean()
     std = X_train.std()
@@ -46,8 +36,9 @@ def standardize_train_test(X_train: np.ndarray, X_test: np.ndarray) -> tuple[np.
 
 
 class PPGCNNRegressor(nn.Module):
-    def __init__(self, input_length: int):
+    def __init__(self, input_length: int, n_demographics: int = 0):
         super().__init__()
+        self.n_demographics = n_demographics
         self.network = nn.Sequential(
             nn.Conv1d(1, 16, kernel_size=9, padding=4),
             nn.BatchNorm1d(16),
@@ -64,24 +55,37 @@ class PPGCNNRegressor(nn.Module):
         )
         self.head = nn.Sequential(
             nn.Flatten(),
-            nn.Linear(64, 32),
+            nn.Linear(64 + n_demographics, 32),
             nn.ReLU(),
             nn.Dropout(0.2),
             nn.Linear(32, 1),
         )
 
-    def forward(self, inputs):
+    def forward(self, inputs, demographics=None):
         features = self.network(inputs)
+        if self.n_demographics > 0:
+            features = torch.cat([features.flatten(1), demographics], dim=1)
+            return self.head(features).squeeze(-1)
         outputs = self.head(features)
         return outputs.squeeze(-1)
 
 
-def make_loader(X: np.ndarray, y: Optional[np.ndarray], batch_size: int, shuffle: bool) -> DataLoader:
-    tensor_x = torch.from_numpy(X[:, None, :]).float()
+def make_loader(
+    X: np.ndarray,
+    y: Optional[np.ndarray],
+    batch_size: int,
+    shuffle: bool,
+    demographics: Optional[np.ndarray] = None,
+) -> DataLoader:
+    tensor_x = torch_float_tensor(X[:, None, :])
     if y is None:
         dataset = TensorDataset(tensor_x)
+    elif demographics is not None:
+        tensor_d = torch_float_tensor(demographics)
+        tensor_y = torch_float_tensor(y)
+        dataset = TensorDataset(tensor_x, tensor_d, tensor_y)
     else:
-        tensor_y = torch.from_numpy(y).float()
+        tensor_y = torch_float_tensor(y)
         dataset = TensorDataset(tensor_x, tensor_y)
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
 
@@ -94,6 +98,7 @@ def train_model(
     learning_rate: float,
     weight_decay: float,
     device: torch.device,
+    use_demographics: bool = False,
 ) -> None:
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
@@ -104,12 +109,20 @@ def train_model(
 
     for _ in range(epochs):
         model.train()
-        for batch_x, batch_y in train_loader:
-            batch_x = batch_x.to(device)
-            batch_y = batch_y.to(device)
-
-            optimizer.zero_grad()
-            predictions = model(batch_x)
+        for batch in train_loader:
+            if use_demographics:
+                batch_x, batch_d, batch_y = batch
+                batch_x = batch_x.to(device)
+                batch_d = batch_d.to(device)
+                batch_y = batch_y.to(device)
+                optimizer.zero_grad()
+                predictions = model(batch_x, batch_d)
+            else:
+                batch_x, batch_y = batch
+                batch_x = batch_x.to(device)
+                batch_y = batch_y.to(device)
+                optimizer.zero_grad()
+                predictions = model(batch_x)
             loss = criterion(predictions, batch_y)
             loss.backward()
             optimizer.step()
@@ -117,10 +130,18 @@ def train_model(
         model.eval()
         val_losses = []
         with torch.no_grad():
-            for batch_x, batch_y in val_loader:
-                batch_x = batch_x.to(device)
-                batch_y = batch_y.to(device)
-                predictions = model(batch_x)
+            for batch in val_loader:
+                if use_demographics:
+                    batch_x, batch_d, batch_y = batch
+                    batch_x = batch_x.to(device)
+                    batch_d = batch_d.to(device)
+                    batch_y = batch_y.to(device)
+                    predictions = model(batch_x, batch_d)
+                else:
+                    batch_x, batch_y = batch
+                    batch_x = batch_x.to(device)
+                    batch_y = batch_y.to(device)
+                    predictions = model(batch_x)
                 val_losses.append(criterion(predictions, batch_y).item())
 
         mean_val_loss = float(np.mean(val_losses)) if val_losses else float('inf')
@@ -137,13 +158,22 @@ def train_model(
         model.load_state_dict(best_state)
 
 
-def predict(model: nn.Module, loader: DataLoader, device: torch.device) -> np.ndarray:
+def predict(
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    use_demographics: bool = False,
+) -> np.ndarray:
     model.eval()
     predictions = []
     with torch.no_grad():
         for batch in loader:
-            batch_x = batch[0].to(device)
-            batch_predictions = model(batch_x).detach().cpu().numpy()
+            if use_demographics:
+                batch_x, batch_d = batch[0].to(device), batch[1].to(device)
+                batch_predictions = tensor_to_numpy(model(batch_x, batch_d))
+            else:
+                batch_x = batch[0].to(device)
+                batch_predictions = tensor_to_numpy(model(batch_x))
             predictions.append(batch_predictions)
     if not predictions:
         return np.empty(0, dtype=np.float32)
@@ -157,15 +187,28 @@ def run_fold(
     val_index: np.ndarray,
     args,
     device: torch.device,
+    demographics: Optional[np.ndarray] = None,
 ) -> tuple[dict, np.ndarray]:
     X_train, X_val = X[train_index], X[val_index]
     y_train, y_val = y[train_index], y[val_index]
     X_train, X_val = standardize_train_test(X_train, X_val)
 
-    train_loader = make_loader(X_train, y_train, batch_size=args.batch_size, shuffle=True)
-    val_loader = make_loader(X_val, y_val, batch_size=args.batch_size, shuffle=False)
+    use_demographics = args.include_basic and demographics is not None and demographics.size > 0
+    demo_train = demo_val = None
+    n_demographics = 0
+    if use_demographics:
+        demo_train, demo_val = demographics[train_index], demographics[val_index]
+        demo_train, demo_val = standardize_train_test(demo_train, demo_val)
+        n_demographics = demo_train.shape[1]
 
-    model = PPGCNNRegressor(input_length=X.shape[1]).to(device)
+    train_loader = make_loader(
+        X_train, y_train, args.batch_size, True, demographics=demo_train
+    )
+    val_loader = make_loader(
+        X_val, y_val, args.batch_size, False, demographics=demo_val
+    )
+
+    model = PPGCNNRegressor(input_length=X.shape[1], n_demographics=n_demographics).to(device)
     train_model(
         model,
         train_loader,
@@ -174,9 +217,10 @@ def run_fold(
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
         device=device,
+        use_demographics=use_demographics,
     )
 
-    predictions = predict(model, val_loader, device)
+    predictions = predict(model, val_loader, device, use_demographics=use_demographics)
     metrics = evaluation.evaluate_regression(y_val, predictions)
     return metrics, predictions
 
@@ -192,7 +236,7 @@ def main():
         signal_length=args.signal_length,
         include_basic=args.include_basic,
     )
-    X = build_model_inputs(signals, demographics, include_basic=args.include_basic)
+    X = signals
     print(
         f'Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}, '
         f'waveform_length: {signals.shape[1]}, input_length: {X.shape[1]}'
@@ -205,7 +249,9 @@ def main():
     oof_predictions = np.empty(len(y), dtype=np.float32)
 
     for fold_index, (train_index, val_index) in enumerate(splitter.split(X, y), start=1):
-        metrics, predictions = run_fold(X, y, train_index, val_index, args, device)
+        metrics, predictions = run_fold(
+            X, y, train_index, val_index, args, device, demographics=demographics
+        )
         oof_predictions[val_index] = predictions
         fold_metrics.append(metrics)
         print(

@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 
+from config import BASIC_FEATURE_KEYS
 from utils import safe_float
 
 
@@ -60,8 +61,8 @@ def extract_basic_info(row: pd.Series) -> dict:
     if not valid:
         return {}
 
-    return {
-        # 'sex': sex,
+    out = {
+        'sex': sex,
         'age': age,
         'height': height,
         'weight': weight,
@@ -70,3 +71,4 @@ def extract_basic_info(row: pd.Series) -> dict:
         # 'blood_pressure_diastolic': diastolic,
         # 'heart_rate': heart_rate,
     }
+    return {k: out[k] for k in BASIC_FEATURE_KEYS}
