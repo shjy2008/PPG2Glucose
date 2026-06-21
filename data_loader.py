@@ -3,7 +3,12 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from pathlib import Path
-from utils import mg_dl_to_mmol_l, safe_float
+from utils import (
+    exclude_target_outlier_arrays,
+    exclude_target_outliers,
+    mg_dl_to_mmol_l,
+    safe_float,
+)
 from data_basic_info import extract_basic_info
 from data_ppg import extract_raw_ppg, read_signal_waveform, extract_ppg_bpm
 # from data_ppg_basic import extract_raw_ppg, read_signal_waveform, extract_ppg_bpm  # performance worse than data_ppg
@@ -192,30 +197,38 @@ def load_waveform_dataset(
     if labels_dir is not None or raw_data_dir is not None:
         if labels_dir is None or raw_data_dir is None:
             raise ValueError('labels_dir and raw_data_dir must both be provided')
-        return _load_kaggle_waveform_dataset(
+        signals, demographics, targets = _load_kaggle_waveform_dataset(
             labels_dir,
             raw_data_dir,
             signal_length=signal_length,
             include_basic=include_basic,
             resample=resample,
         )
+    else:
+        root = resolve_dataset_root(dataset)
+        layout = dataset_layout(root)
+        if layout == 'kaggle':
+            signals, demographics, targets = _load_kaggle_waveform_dataset(
+                root / 'Labels',
+                root / 'RawData',
+                signal_length=signal_length,
+                include_basic=include_basic,
+                resample=resample,
+            )
+        else:
+            signals, demographics, targets = _load_southwest_waveform_dataset(
+                root,
+                signal_length=signal_length,
+                include_basic=include_basic,
+                resample=resample,
+            )
 
-    root = resolve_dataset_root(dataset)
-    layout = dataset_layout(root)
-    if layout == 'kaggle':
-        return _load_kaggle_waveform_dataset(
-            root / 'Labels',
-            root / 'RawData',
-            signal_length=signal_length,
-            include_basic=include_basic,
-            resample=resample,
-        )
-    return _load_southwest_waveform_dataset(
-        root,
-        signal_length=signal_length,
-        include_basic=include_basic,
-        resample=resample,
+    targets, signals, demographics = exclude_target_outlier_arrays(
+        targets,
+        signals,
+        demographics,
     )
+    return signals, demographics, targets
 
 
 def _load_kaggle_waveform_dataset(
@@ -366,17 +379,13 @@ def split(dataset: pd.DataFrame):
     ]
     X = dataset[feature_columns]
     y = dataset['target']
+    X, y = exclude_target_outliers(X, y)
+    feature_columns = list(X.columns)
     return X, y, feature_columns
 
 
 def get_X_y(dataset: pd.DataFrame):
-    feature_columns = [
-        column
-        for column in dataset.columns
-        if column not in {'subject_ID', 'session_ID', 'target'}
-    ]
-    X = dataset[feature_columns]
-    y = dataset['target']
+    X, y, _ = split(dataset)
     return X, y
 
 # def impute_scale_dataset(X: pd.DataFrame, strategy: str = 'median') -> pd.DataFrame:

@@ -11,11 +11,11 @@ import numpy as np
 from config import catboost_kwargs
 
 DEFAULT_PARAMS = {
-    'iterations': 400,
-    'learning_rate': 0.05,
-    'depth': 3,
-    'subsample': 0.9,
-    'reg_lambda': 1.0,
+    # 'iterations': 400,
+    # 'learning_rate': 0.05,
+    # 'depth': 3,
+    # 'subsample': 0.9,
+    # 'reg_lambda': 1.0,
 
     # 'iterations': 450,
     # 'learning_rate': 0.025629380669206163,
@@ -25,13 +25,13 @@ DEFAULT_PARAMS = {
     # 'min_data_in_leaf': 7,
     # 'border_count': 192,
 
-    # 'iterations': 500,
-    # 'learning_rate': 0.025,
-    # 'depth': 3,
-    # 'subsample': 0.75,
-    # 'reg_lambda': 0.15,
-    # 'min_data_in_leaf': 7,
-    # 'border_count': 190,
+    'iterations': 500,
+    'learning_rate': 0.025,
+    'depth': 3,
+    'subsample': 0.75,
+    'reg_lambda': 0.15,
+    'min_data_in_leaf': 7,
+    'border_count': 190,
 }
 
 
@@ -87,14 +87,6 @@ def main():
     ds = data_loader.load_dataset(args.dataset)
     print(f"Using dataset: {args.dataset}")
     X, y, feature_names = data_loader.split(ds)
-    # ---------------------------------------------------------------------
-    # Outlier handling – remove extreme target values (outside 1st‑99th percentiles)
-    # ---------------------------------------------------------------------
-    lower_q, upper_q = np.quantile(y, [0.01, 0.99])
-    mask = (y >= lower_q) & (y <= upper_q)
-    X = X[mask]
-    y = y[mask]
-    feature_names = list(X.columns)
     n_evaluations = args.n_splits * len(args.seeds)
     print(
         f"Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}, "

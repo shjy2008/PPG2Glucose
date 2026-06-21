@@ -14,6 +14,12 @@ MG_DL_TO_MMOL_L = 1.0 / 18.0
 # Shared default for repeated k-fold CV (5-fold x 5 seeds = 25 evaluations).
 DEFAULT_SEEDS = (42, 52, 62, 72, 82)
 
+# Drop glucose targets outside this quantile range (mmol/L).
+# TARGET_OUTLIER_LOWER_Q = 0
+# TARGET_OUTLIER_UPPER_Q = 1
+TARGET_OUTLIER_LOWER_Q = 0.01
+TARGET_OUTLIER_UPPER_Q = 0.99
+
 
 def mg_dl_to_mmol_l(value: float) -> float:
     return float(value) * MG_DL_TO_MMOL_L
@@ -26,6 +32,35 @@ def safe_float(value):
         return float(value)
     except (TypeError, ValueError):
         return np.nan
+
+
+def _target_outlier_mask(y):
+    values = np.asarray(y, dtype=float)
+    lower, upper = np.quantile(values, [TARGET_OUTLIER_LOWER_Q, TARGET_OUTLIER_UPPER_Q])
+    mask = (values >= lower) & (values <= upper)
+    return mask, lower, upper
+
+
+def exclude_target_outliers(X: pd.DataFrame, y: pd.Series) -> tuple[pd.DataFrame, pd.Series]:
+    mask, lower, upper = _target_outlier_mask(y)
+    n_removed = int((~mask).sum())
+    if n_removed:
+        print(
+            f'Excluded {n_removed} target outlier(s) outside '
+            f'[{lower:.4f}, {upper:.4f}] mmol/L'
+        )
+    return X.loc[mask].reset_index(drop=True), y.loc[mask].reset_index(drop=True)
+
+
+def exclude_target_outlier_arrays(y: np.ndarray, *arrays: np.ndarray) -> tuple[np.ndarray, ...]:
+    mask, lower, upper = _target_outlier_mask(y)
+    n_removed = int((~mask).sum())
+    if n_removed:
+        print(
+            f'Excluded {n_removed} target outlier(s) outside '
+            f'[{lower:.4f}, {upper:.4f}] mmol/L'
+        )
+    return (y[mask], *(array[mask] for array in arrays))
 
 
 def _prepare_xy(X: pd.DataFrame, y: pd.Series) -> tuple[pd.DataFrame, pd.Series]:
