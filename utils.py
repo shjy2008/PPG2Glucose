@@ -242,6 +242,8 @@ def run_repeated_kfold_comparison(
             'r2_std': summary['r2']['std'],
             'acc_mean': 100.0 * summary['acc']['mean'],
             'acc_std': 100.0 * summary['acc']['std'],
+            'mard_mean': summary['mard']['mean'],
+            'mard_std': summary['mard']['std'],
             'zone_a_mean': 100.0 * summary['zone_a']['mean'],
             'zone_a_std': 100.0 * summary['zone_a']['std'],
             'zone_b_mean': 100.0 * summary['zone_b']['mean'],
@@ -372,6 +374,8 @@ def run_repeated_kfold_training(
         'r2_std': summary['r2']['std'],
         'acc_mean': 100.0 * summary['acc']['mean'],
         'acc_std': 100.0 * summary['acc']['std'],
+        'mard_mean': summary['mard']['mean'],
+        'mard_std': summary['mard']['std'],
         'zone_a_mean': 100.0 * summary['zone_a']['mean'],
         'zone_a_std': 100.0 * summary['zone_a']['std'],
         'zone_b_mean': 100.0 * summary['zone_b']['mean'],
@@ -443,6 +447,9 @@ def print_comparison_table(summary_df: pd.DataFrame) -> None:
             'RMSE (mmol/L)': evaluation.format_metric_summary(row['rmse_mean'], row['rmse_std']),
             'R2': evaluation.format_metric_summary(row['r2_mean'], row['r2_std']),
             'ACC (%)': evaluation.format_metric_summary(row['acc_mean'], row['acc_std'], decimals=2),
+            'MARD (%)': evaluation.format_metric_summary(
+                row['mard_mean'], row['mard_std'], decimals=2
+            ),
             'Zone A (%)': evaluation.format_metric_summary(
                 row['zone_a_mean'], row['zone_a_std'], decimals=2
             ),

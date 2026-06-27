@@ -262,6 +262,16 @@ def glucose_prediction_acc(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(np.mean(ok)) if ok.size else np.nan
 
 
+def glucose_mard(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """Mean Absolute Relative Difference (%)."""
+    y_true = np.asarray(y_true, dtype=float).reshape(-1)
+    y_pred = np.asarray(y_pred, dtype=float).reshape(-1)
+    mask = y_true > 0
+    if not np.any(mask):
+        return np.nan
+    return float(100.0 * np.mean(np.abs((y_pred[mask] - y_true[mask]) / y_true[mask])))
+
+
 def evaluate_regression(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)
@@ -274,6 +284,7 @@ def evaluate_regression(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
         'mae': mae,
         'r2': r2,
         'acc': glucose_prediction_acc(y_true, y_pred),
+        'mard': glucose_mard(y_true, y_pred),
         'zone_a': zone_fractions['zone_a'],
         'zone_b': zone_fractions['zone_b'],
     }
@@ -299,6 +310,7 @@ def print_regression_report(
     print(f"MAE ({unit}):  {metrics['mae']:.4f}")
     print(f"R2:   {metrics['r2']:.4f}")
     print(f"ACC (%): {100.0 * metrics['acc']:.2f}")
+    print(f"MARD (%): {metrics['mard']:.2f}")
     print('Clarke Error Grid:')
     print(f"Zone A (%): {100.0 * metrics['zone_a']:.2f}")
     print(f"Zone B (%): {100.0 * metrics['zone_b']:.2f}")
@@ -340,6 +352,7 @@ def summarize_repeated_cv_metrics(
         'mae',
         'r2',
         'acc',
+        'mard',
         'zone_a',
         'zone_b',
     ),
