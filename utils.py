@@ -287,7 +287,8 @@ def run_repeated_kfold_training(
     accum = np.zeros(len(feature_names), dtype=float)
     selection_counts = np.zeros(len(feature_names), dtype=int)
     fold_metrics: list[dict] = []
-    oof_predictions = np.empty(len(y), dtype=float)
+    oof_sum = np.zeros(len(y), dtype=float)
+    oof_count = np.zeros(len(y), dtype=float)
     n_runs = 0
     use_selection = select_top_n is not None and select_top_n < X.shape[1]
 
@@ -349,8 +350,8 @@ def run_repeated_kfold_training(
             metrics = evaluation.evaluate_regression(y_val.values, predictions)
             fold_metrics.append(metrics)
             accum += importances
-            if seed_index == 1:
-                oof_predictions[val_index] = predictions
+            oof_sum[val_index] += predictions
+            oof_count[val_index] += 1.0
             n_runs += 1
 
             if verbose:
@@ -405,6 +406,7 @@ def run_repeated_kfold_training(
                 )
             )
 
+        oof_predictions = oof_sum / oof_count
         evaluation.print_clarke_plot(y.values, oof_predictions)
 
     return summary_df, importance_df

@@ -6,6 +6,7 @@ from typing import Optional, Union
 import matplotlib
 
 matplotlib.use('Agg')
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -23,6 +24,10 @@ CLARKE_ZONE_COLORS = {
 }
 
 CLARKE_PLOT_PATH = 'clarke_error_grid.png'
+SEG_PLOT_PATH = 'seg_error_grid.png'
+SEG_GRID_IMAGE = Path(__file__).resolve().parent / 'evaluation_data' / 'seg_grid.png'
+SEG_IMAGE_MAX_MG_DL = 600.0
+SEG_AXIS_MAX_MG_DL = 400.0
 
 
 def target_stats(y: np.ndarray) -> dict:
@@ -181,6 +186,73 @@ def plot_clarke_error_grid(
     plt.close(fig)
 
 
+def _seg_colormap() -> mcolors.LinearSegmentedColormap:
+    colors = [
+        (0, 165 / 256, 0),
+        (0, 1, 0),
+        (1, 1, 0),
+        (1, 0, 0),
+        (128 / 256, 0, 0),
+    ]
+    nodes = [0.0, 0.4375, 1.0625, 2.75, 4.0]
+    return mcolors.LinearSegmentedColormap.from_list(
+        'seg',
+        list(zip([node / 4.0 for node in nodes], colors)),
+    )
+
+
+def plot_seg_error_grid(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    *,
+    title: str = 'Surveillance Error Grid',
+    save_path: Optional[Union[str, Path]] = None,
+) -> None:
+    """Scatter plot on the Surveillance Error Grid (axes in mmol/L)."""
+    y_true = np.asarray(y_true, dtype=float).reshape(-1)
+    y_pred = np.asarray(y_pred, dtype=float).reshape(-1)
+    axis_max_mmol = SEG_AXIS_MAX_MG_DL / MMOL_L_TO_MG_DL
+    image_max_mmol = SEG_IMAGE_MAX_MG_DL / MMOL_L_TO_MG_DL
+
+    fig, ax = plt.subplots(figsize=(7.5, 7))
+    grid = np.flipud(plt.imread(SEG_GRID_IMAGE))
+    image = ax.imshow(
+        grid,
+        origin='lower',
+        extent=(0.0, image_max_mmol, 0.0, image_max_mmol),
+        cmap=_seg_colormap(),
+        vmin=0.0,
+        vmax=4.0,
+        aspect='equal',
+        zorder=0,
+    )
+    ax.scatter(
+        y_true,
+        y_pred,
+        s=28,
+        facecolors='white',
+        edgecolors='black',
+        linewidths=0.6,
+        alpha=0.9,
+        zorder=3,
+    )
+    ax.plot([0, axis_max_mmol], [0, axis_max_mmol], ':', color='black', linewidth=1.0, zorder=2)
+    ax.set_xlim(0.0, axis_max_mmol)
+    ax.set_ylim(0.0, axis_max_mmol)
+    ax.set_xlabel('Reference glucose (mmol/L)')
+    ax.set_ylabel('Predicted glucose (mmol/L)')
+    ax.set_title(title)
+
+    cbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label('Risk level')
+    cbar.set_ticks([0.25, 1.0, 2.0, 3.0, 3.75])
+    cbar.set_ticklabels(['None', 'Slight', 'Moderate', 'High', 'Extreme'])
+
+    if save_path is not None:
+        fig.savefig(save_path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+
+
 def glucose_prediction_acc(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     """ACC fraction: |error| < 0.8 if y <= 5.55 mmol/L, else relative error <= 15%."""
     y_true = np.asarray(y_true, dtype=float).reshape(-1)
@@ -208,9 +280,11 @@ def evaluate_regression(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
 
 
 def print_clarke_plot(y_true: np.ndarray, y_pred: np.ndarray) -> None:
-    """Save Clarke Error Grid scatter plot (metrics come from CV summary)."""
+    """Save Clarke and SEG scatter plots (metrics come from CV summary)."""
     plot_clarke_error_grid(y_true, y_pred, save_path=CLARKE_PLOT_PATH)
+    plot_seg_error_grid(y_true, y_pred, save_path=SEG_PLOT_PATH)
     print(f'\nClarke Error Grid plot saved to {CLARKE_PLOT_PATH}')
+    print(f'Surveillance Error Grid plot saved to {SEG_PLOT_PATH}')
 
 
 def print_regression_report(
