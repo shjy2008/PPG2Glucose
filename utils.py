@@ -242,6 +242,10 @@ def run_repeated_kfold_comparison(
             'r2_std': summary['r2']['std'],
             'acc_mean': 100.0 * summary['acc']['mean'],
             'acc_std': 100.0 * summary['acc']['std'],
+            'zone_a_mean': 100.0 * summary['zone_a']['mean'],
+            'zone_a_std': 100.0 * summary['zone_a']['std'],
+            'zone_b_mean': 100.0 * summary['zone_b']['mean'],
+            'zone_b_std': 100.0 * summary['zone_b']['std'],
         })
 
     summary_df = pd.DataFrame(summary_rows).reset_index(drop=True)
@@ -283,6 +287,7 @@ def run_repeated_kfold_training(
     accum = np.zeros(len(feature_names), dtype=float)
     selection_counts = np.zeros(len(feature_names), dtype=int)
     fold_metrics: list[dict] = []
+    oof_predictions = np.empty(len(y), dtype=float)
     n_runs = 0
     use_selection = select_top_n is not None and select_top_n < X.shape[1]
 
@@ -344,6 +349,8 @@ def run_repeated_kfold_training(
             metrics = evaluation.evaluate_regression(y_val.values, predictions)
             fold_metrics.append(metrics)
             accum += importances
+            if seed_index == 1:
+                oof_predictions[val_index] = predictions
             n_runs += 1
 
             if verbose:
@@ -364,6 +371,10 @@ def run_repeated_kfold_training(
         'r2_std': summary['r2']['std'],
         'acc_mean': 100.0 * summary['acc']['mean'],
         'acc_std': 100.0 * summary['acc']['std'],
+        'zone_a_mean': 100.0 * summary['zone_a']['mean'],
+        'zone_a_std': 100.0 * summary['zone_a']['std'],
+        'zone_b_mean': 100.0 * summary['zone_b']['mean'],
+        'zone_b_std': 100.0 * summary['zone_b']['std'],
     }])
 
     mean_importance = accum / n_runs
@@ -393,6 +404,8 @@ def run_repeated_kfold_training(
                     index=False,
                 )
             )
+
+        evaluation.print_clarke_plot(y.values, oof_predictions)
 
     return summary_df, importance_df
 
@@ -428,6 +441,12 @@ def print_comparison_table(summary_df: pd.DataFrame) -> None:
             'RMSE (mmol/L)': evaluation.format_metric_summary(row['rmse_mean'], row['rmse_std']),
             'R2': evaluation.format_metric_summary(row['r2_mean'], row['r2_std']),
             'ACC (%)': evaluation.format_metric_summary(row['acc_mean'], row['acc_std'], decimals=2),
+            'Zone A (%)': evaluation.format_metric_summary(
+                row['zone_a_mean'], row['zone_a_std'], decimals=2
+            ),
+            'Zone B (%)': evaluation.format_metric_summary(
+                row['zone_b_mean'], row['zone_b_std'], decimals=2
+            ),
             'N': int(row['n_evaluations']),
         })
     print(pd.DataFrame(rows).to_string(index=False))
