@@ -35,13 +35,22 @@ def print_target_stats(y: np.ndarray) -> None:
     print('----------------------------------\n')
 
 
+def glucose_prediction_acc(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    """ACC fraction: |error| < 0.8 if y <= 5.55 mmol/L, else relative error <= 15%."""
+    y_true = np.asarray(y_true, dtype=float).reshape(-1)
+    y_pred = np.asarray(y_pred, dtype=float).reshape(-1)
+    err = np.abs(y_pred - y_true)
+    ok = np.where(y_true <= 5.55, err < 0.8, err / y_true <= 0.15)
+    return float(np.mean(ok)) if ok.size else np.nan
+
+
 def evaluate_regression(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)
     rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
     mae = float(mean_absolute_error(y_true, y_pred))
     r2 = float(r2_score(y_true, y_pred))
-    return {'rmse': rmse, 'mae': mae, 'r2': r2}
+    return {'rmse': rmse, 'mae': mae, 'r2': r2, 'acc': glucose_prediction_acc(y_true, y_pred)}
 
 
 def print_regression_report(y_true: np.ndarray, y_pred: np.ndarray, preview_n: int = 10) -> None:
@@ -51,6 +60,7 @@ def print_regression_report(y_true: np.ndarray, y_pred: np.ndarray, preview_n: i
     print(f"RMSE ({unit}): {metrics['rmse']:.4f}")
     print(f"MAE ({unit}):  {metrics['mae']:.4f}")
     print(f"R2:   {metrics['r2']:.4f}")
+    print(f"ACC (%): {100.0 * metrics['acc']:.2f}")
 
     preview = pd.DataFrame({
         f'actual ({unit})': np.asarray(y_true).reshape(-1),
@@ -80,7 +90,7 @@ def format_metric_summary(mean: float, std: float, decimals: int = 4) -> str:
 
 def summarize_repeated_cv_metrics(
     fold_metrics: list[dict],
-    metric_names: tuple[str, ...] = ('rmse', 'mae', 'r2'),
+    metric_names: tuple[str, ...] = ('rmse', 'mae', 'r2', 'acc'),
 ) -> dict:
     """Aggregate per-fold metric dicts into mean/std summaries."""
     return {

@@ -240,6 +240,8 @@ def run_repeated_kfold_comparison(
             'rmse_std': summary['rmse']['std'],
             'r2_mean': summary['r2']['mean'],
             'r2_std': summary['r2']['std'],
+            'acc_mean': 100.0 * summary['acc']['mean'],
+            'acc_std': 100.0 * summary['acc']['std'],
         })
 
     summary_df = pd.DataFrame(summary_rows).reset_index(drop=True)
@@ -360,6 +362,8 @@ def run_repeated_kfold_training(
         'rmse_std': summary['rmse']['std'],
         'r2_mean': summary['r2']['mean'],
         'r2_std': summary['r2']['std'],
+        'acc_mean': 100.0 * summary['acc']['mean'],
+        'acc_std': 100.0 * summary['acc']['std'],
     }])
 
     mean_importance = accum / n_runs
@@ -423,6 +427,7 @@ def print_comparison_table(summary_df: pd.DataFrame) -> None:
             'MAE (mmol/L)': evaluation.format_metric_summary(row['mae_mean'], row['mae_std']),
             'RMSE (mmol/L)': evaluation.format_metric_summary(row['rmse_mean'], row['rmse_std']),
             'R2': evaluation.format_metric_summary(row['r2_mean'], row['r2_std']),
+            'ACC (%)': evaluation.format_metric_summary(row['acc_mean'], row['acc_std'], decimals=2),
             'N': int(row['n_evaluations']),
         })
     print(pd.DataFrame(rows).to_string(index=False))
