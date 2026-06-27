@@ -8,7 +8,7 @@ from catboost import CatBoostRegressor
 import data_loader
 import utils
 import numpy as np
-from config import catboost_kwargs
+from config import DEFAULT_SEEDS, catboost_kwargs
 
 DEFAULT_PARAMS = {
     # 'iterations': 400,
@@ -45,13 +45,6 @@ def build_parser():
     )
     p.add_argument('--n-splits', type=int, default=5)
     p.add_argument(
-        '--seeds',
-        type=int,
-        nargs='+',
-        default=list(utils.DEFAULT_SEEDS),
-        help='Random seeds for fold shuffling (default: 42 52 62 72 82)',
-    )
-    p.add_argument(
         '--select-top',
         type=int,
         default=None,
@@ -87,7 +80,6 @@ def main():
     ds = data_loader.load_dataset(args.dataset)
     print(f"Using dataset: {args.dataset}")
     X, y, feature_names = data_loader.split(ds)
-    n_evaluations = args.n_splits * len(args.seeds)
     print(
         f"Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}, "
         f"features: {X.shape[1]}"
@@ -104,22 +96,22 @@ def main():
         return model.predict(X)
 
     all_preds = []
-    for seed in args.seeds:
+    for seed in DEFAULT_SEEDS:
         all_preds.append(train_and_predict(seed))
     training_pred = np.mean(np.column_stack(all_preds), axis=1)
     mae = np.mean(np.abs(training_pred - y))
     print(f"Training MAE: {mae:.4f} mmol/L")
 
-    _, fi = utils.run_repeated_kfold_training(
+    summary_df, fi = utils.run_repeated_kfold_training(
         X,
         y,
+        lambda seed: build_model(seed, params),
         feature_names,
-        model_factory=lambda seed: build_model(seed, params),
         model_name='catboost',
         n_splits=args.n_splits,
-        seeds=args.seeds,
         select_top_n=args.select_top,
     )
+    n_evaluations = int(summary_df['n_evaluations'].iloc[0])
     if args.select_top is not None:
         fi_used = fi[fi['importance'] > 0].reset_index(drop=True)
         n_print = min(args.top, len(fi_used))

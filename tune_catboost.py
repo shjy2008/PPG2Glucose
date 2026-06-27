@@ -12,9 +12,9 @@ from sklearn.model_selection import KFold
 import data_loader
 import evaluation
 import utils
+from config import DEFAULT_SEEDS
 from train_catboost import DEFAULT_PARAMS, build_model
 
-SEEDS = list(utils.DEFAULT_SEEDS)
 RESULTS_PATH = Path('results/catboost_best_params.json')
 
 
@@ -44,7 +44,7 @@ def suggest_params(trial: optuna.Trial) -> dict:
 
 def cv_mae(X, y, params: dict, n_splits: int) -> float:
     scores = []
-    for seed in SEEDS:
+    for seed in DEFAULT_SEEDS:
         cv = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
         for train_index, val_index in cv.split(X, y):
             X_train = X.iloc[train_index]
@@ -69,12 +69,12 @@ def main():
     X, y = utils._prepare_xy(X, y)
 
     print(f'Dataset: {args.dataset} ({X.shape[0]} samples)')
-    print(f'Tuning: {args.n_trials} trials, {args.n_splits}-fold x {len(SEEDS)} seeds')
+    print(f'Tuning: {args.n_trials} trials, {args.n_splits}-fold x {len(DEFAULT_SEEDS)} seeds')
     print(f'Default params: {DEFAULT_PARAMS}')
 
     study = optuna.create_study(
         direction='minimize',
-        sampler=optuna.samplers.TPESampler(seed=SEEDS[0]),
+        sampler=optuna.samplers.TPESampler(seed=DEFAULT_SEEDS[0]),
     )
     study.optimize(
         lambda trial: cv_mae(X, y, suggest_params(trial), args.n_splits),
@@ -92,19 +92,19 @@ def main():
 
     print('\nComparing default vs tuned...')
     default_summary, _ = utils.run_repeated_kfold_training(
-        X, y, X.columns.tolist(),
-        model_factory=lambda seed: build_model(seed),
+        X, y,
+        lambda seed: build_model(seed),
+        X.columns.tolist(),
         model_name='catboost_default',
         n_splits=args.n_splits,
-        seeds=SEEDS,
         verbose=False,
     )
     tuned_summary, _ = utils.run_repeated_kfold_training(
-        X, y, X.columns.tolist(),
-        model_factory=lambda seed: build_model(seed, best_params),
+        X, y,
+        lambda seed: build_model(seed, best_params),
+        X.columns.tolist(),
         model_name='catboost_tuned',
         n_splits=args.n_splits,
-        seeds=SEEDS,
         verbose=False,
     )
     utils.print_comparison_table(pd.concat([default_summary, tuned_summary], ignore_index=True))

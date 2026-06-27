@@ -4,7 +4,6 @@ import numpy as np
 from sklearn.tree import DecisionTreeRegressor
 
 import data_loader
-import evaluation
 import utils
 
 
@@ -12,7 +11,7 @@ def build_parser():
     p = argparse.ArgumentParser()
     p.add_argument('--dataset', default='southwest', help='southwest or kaggle')
     p.add_argument('--n-splits', type=int, default=5)
-    p.add_argument('--seed', type=int, default=42)
+    p.add_argument('--top', type=int, default=10, help='Number of top features to print')
     return p
 
 
@@ -35,18 +34,19 @@ def main():
     X, y, feature_names = data_loader.split(ds)
     print(f"Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}")
 
-    final_model, _, _ = utils.run_kfold_regression(
+    summary_df, fi = utils.run_repeated_kfold_training(
         X,
         y,
-        model_factory=lambda: build_model(args.seed, X.shape[1]),
+        lambda seed: build_model(seed, X.shape[1]),
+        feature_names,
+        model_name='randomtree',
         n_splits=args.n_splits,
-        seed=args.seed,
     )
-
-    fi = evaluation.feature_importances_df(final_model, feature_names)
-    if fi is not None:
-        print('\nTop features:')
-        print(fi.head(10).to_string(index=False))
+    n_evaluations = int(summary_df['n_evaluations'].iloc[0])
+    top = fi.head(args.top)[['feature']].copy()
+    top['%'] = 100.0 * fi.head(args.top)['importance'].to_numpy()
+    print(f'\nTop {args.top} features (mean % importance over {n_evaluations} fits):')
+    print(top.to_string(index=False, formatters={'%': '{:.2f}'.format}))
 
 
 if __name__ == '__main__':

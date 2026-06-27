@@ -83,66 +83,18 @@ def _impute_features(
     return X_train_imputed, X_other_imputed, imputer
 
 
-def run_kfold_regression(
-    X: pd.DataFrame,
-    y: pd.Series,
-    model_factory: Callable[[], object],
-    n_splits: int = 5,
-    seed: int = 42,
-) -> Tuple[object, Sequence[dict], np.ndarray]:
-    """Run k-fold CV for a regression estimator.
-
-    - Drops rows with missing targets before CV.
-    - Median-imputes missing feature values per fold (fit on train only).
-    - Fits model_factory() per-fold on training rows and predicts validation rows.
-    - Prints per-fold and aggregate metrics and returns final model refit on full data.
-    """
-    cv = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
-    X, y = _prepare_xy(X, y)
-
-    if X.isna().any().any():
-        nan_columns = X.columns[X.isna().any()].tolist()
-        print(
-            f"Warning: imputing missing values in {len(nan_columns)} feature(s): "
-            f"{', '.join(nan_columns)}"
-        )
-
-    evaluation.print_target_stats(y.values)
-
-    fold_metrics = []
-    oof_predictions = np.empty(len(y), dtype=float)
-
-    for fold_index, (train_index, val_index) in enumerate(cv.split(X, y), start=1):
-        model = model_factory()
-        X_train = X.iloc[train_index]
-        y_train = y.iloc[train_index]
-        X_val = X.iloc[val_index]
-        y_val = y.iloc[val_index]
-
-        X_train, X_val, _ = _impute_features(X_train, X_val)
-        model.fit(X_train, y_train)
-        predictions = model.predict(X_val)
-        oof_predictions[val_index] = predictions
-
-        metrics = evaluation.evaluate_regression(y_val.values, predictions)
-        fold_metrics.append(metrics)
-        print(
-            f"Fold {fold_index}: RMSE={metrics['rmse']:.4f} mmol/L "
-            f"MAE={metrics['mae']:.4f} mmol/L R2={metrics['r2']:.4f}"
-        )
-
-    print('\nCross-validation summary:')
-    for metric_name in ('rmse', 'mae', 'r2'):
-        values = np.asarray([metrics[metric_name] for metrics in fold_metrics], dtype=float)
-        suffix = ' mmol/L' if metric_name in ('rmse', 'mae') else ''
-        print(f"{metric_name.upper()}{suffix}: {values.mean():.4f} ± {values.std(ddof=1):.4f}")
-
-    evaluation.print_regression_report(y.values, oof_predictions)
-
-    X_imputed, _, imputer = _impute_features(X, X)
-    final_model = model_factory()
-    final_model.fit(X_imputed, y)
-    return final_model, fold_metrics, oof_predictions
+def _normalized_feature_importances(model) -> Optional[np.ndarray]:
+    estimator = model
+    if hasattr(estimator, 'named_steps'):
+        named_steps = getattr(estimator, 'named_steps')
+        estimator = named_steps.get('model', list(named_steps.values())[-1])
+    if not hasattr(estimator, 'feature_importances_'):
+        return None
+    importances = np.asarray(estimator.feature_importances_, dtype=float)
+    total = importances.sum()
+    if total > 0:
+        importances = importances / total
+    return importances
 
 
 def run_repeated_kfold_comparison(
@@ -150,7 +102,6 @@ def run_repeated_kfold_comparison(
     y: pd.Series,
     factories: Mapping[str, Callable[[int], object]],
     n_splits: int = 5,
-    seeds: Sequence[int] = DEFAULT_SEEDS,
     include_ensemble: bool = False,
     ensemble_name: str = 'ensemble',
     verbose: bool = True,
@@ -167,6 +118,7 @@ def run_repeated_kfold_comparison(
         summary_df: mean ± std of per-fold scores
     """
     X, y = _prepare_xy(X, y)
+    seeds = DEFAULT_SEEDS
     model_names = list(factories.keys())
     use_ensemble = include_ensemble and len(model_names) > 1
     tracked_names = [*model_names, ensemble_name] if use_ensemble else model_names
@@ -253,8 +205,7 @@ def run_repeated_kfold_comparison(
     summary_df = pd.DataFrame(summary_rows).reset_index(drop=True)
 
     if verbose:
-        print('\n=== Repeated cross-validation summary (mean ± std) ===')
-        print_comparison_table(summary_df)
+        print_cv_results(summary_df)
 
     return fold_metrics_by_model, summary_df
 
@@ -268,31 +219,38 @@ def _top_feature_indices(model, n_features: int, top_n: int) -> np.ndarray:
 def run_repeated_kfold_training(
     X: pd.DataFrame,
     y: pd.Series,
-    feature_names: Sequence[str],
     model_factory: Callable[[int], object],
+    feature_names: Optional[Sequence[str]] = None,
     model_name: str = 'model',
     n_splits: int = 5,
-    seeds: Sequence[int] = DEFAULT_SEEDS,
     select_top_n: Optional[int] = None,
     verbose: bool = True,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Repeated k-fold CV for one model: metrics and feature importances.
+    """Repeated k-fold CV for one model: metrics and optional feature importances.
 
     Uses the same fold splits, imputation, and seed handling as
     run_repeated_kfold_comparison. Each fold fit contributes one validation
-    score and one normalized feature-importance vector.
+    score and one normalized feature-importance vector when available.
 
     When select_top_n is set (and less than the feature count), feature ranking
     is fit on each training fold only, then the model is refit on those columns.
     """
     X, y = _prepare_xy(X, y)
-    accum = np.zeros(len(feature_names), dtype=float)
-    selection_counts = np.zeros(len(feature_names), dtype=int)
+    seeds = DEFAULT_SEEDS
+    track_importances = feature_names is not None and len(feature_names) > 0
+    if track_importances:
+        accum = np.zeros(len(feature_names), dtype=float)
+        selection_counts = np.zeros(len(feature_names), dtype=int)
     fold_metrics: list[dict] = []
     oof_sum = np.zeros(len(y), dtype=float)
     oof_count = np.zeros(len(y), dtype=float)
     n_runs = 0
-    use_selection = select_top_n is not None and select_top_n < X.shape[1]
+    importance_runs = 0
+    use_selection = (
+        select_top_n is not None
+        and track_importances
+        and select_top_n < X.shape[1]
+    )
 
     if X.isna().any().any() and verbose:
         nan_columns = X.columns[X.isna().any()].tolist()
@@ -344,14 +302,13 @@ def run_repeated_kfold_training(
                 model = model_factory(seed)
                 model.fit(X_train, y_train)
                 predictions = model.predict(X_val)
-                importances = np.asarray(model.feature_importances_, dtype=float)
-                total = importances.sum()
-                if total > 0:
-                    importances = importances / total
+                importances = _normalized_feature_importances(model)
 
             metrics = evaluation.evaluate_regression(y_val.values, predictions)
             fold_metrics.append(metrics)
-            accum += importances
+            if track_importances and importances is not None:
+                accum += importances
+                importance_runs += 1
             oof_sum[val_index] += predictions
             oof_count[val_index] += 1.0
             n_runs += 1
@@ -382,15 +339,16 @@ def run_repeated_kfold_training(
         'zone_b_std': 100.0 * summary['zone_b']['std'],
     }])
 
-    mean_importance = accum / n_runs
-    importance_df = pd.DataFrame({
-        'feature': list(feature_names),
-        'importance': mean_importance,
-    }).sort_values('importance', ascending=False).reset_index(drop=True)
+    if track_importances and importance_runs > 0:
+        mean_importance = accum / importance_runs
+        importance_df = pd.DataFrame({
+            'feature': list(feature_names),
+            'importance': mean_importance,
+        }).sort_values('importance', ascending=False).reset_index(drop=True)
+    else:
+        importance_df = pd.DataFrame(columns=['feature', 'importance'])
 
     if verbose:
-        print('\n=== Repeated cross-validation summary (mean ± std) ===')
-        print_comparison_table(summary_df)
         if use_selection:
             freq = pd.DataFrame({
                 'feature': list(feature_names),
@@ -411,7 +369,7 @@ def run_repeated_kfold_training(
             )
 
         oof_predictions = oof_sum / oof_count
-        evaluation.print_clarke_plot(y.values, oof_predictions)
+        print_cv_results(summary_df, y.values, oof_predictions)
 
     return summary_df, importance_df
 
@@ -422,19 +380,49 @@ def aggregate_feature_importances(
     feature_names: Sequence[str],
     model_factory: Callable[[int], object],
     n_splits: int = 5,
-    seeds: Sequence[int] = DEFAULT_SEEDS,
 ) -> pd.DataFrame:
     """Mean normalized feature importances over repeated k-fold fits."""
     _, importance_df = run_repeated_kfold_training(
         X,
         y,
-        feature_names,
         model_factory,
+        feature_names,
         n_splits=n_splits,
-        seeds=seeds,
         verbose=False,
     )
     return importance_df
+
+
+def print_cv_results(
+    summary_df: pd.DataFrame,
+    y_true: Optional[np.ndarray] = None,
+    y_pred: Optional[np.ndarray] = None,
+    preview_n: int = 10,
+) -> None:
+    """Print unified CV metrics (mean ± std) and optional Clarke/SEG plots."""
+    n_evaluations = int(summary_df['n_evaluations'].iloc[0])
+    n_models = len(summary_df)
+    if n_models == 1:
+        print(
+            f'\n=== Cross-validation results (mean ± std, N={n_evaluations}) ==='
+        )
+    else:
+        print(
+            f'\n=== Cross-validation results (mean ± std, N={n_evaluations} per model) ==='
+        )
+    print_comparison_table(summary_df)
+
+    if y_true is None or y_pred is None:
+        return
+
+    evaluation.print_clarke_plot(y_true, y_pred)
+
+    preview = pd.DataFrame({
+        'actual (mmol/L)': np.asarray(y_true).reshape(-1),
+        'predicted (mmol/L)': np.asarray(y_pred).reshape(-1),
+    })
+    print('\nPredictions preview:')
+    print(preview.head(preview_n).to_string(index=False))
 
 
 def print_comparison_table(summary_df: pd.DataFrame) -> None:

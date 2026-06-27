@@ -12,11 +12,10 @@ def build_parser():
     p = argparse.ArgumentParser()
     p.add_argument('--dataset', default='southwest', help='southwest or kaggle')
     p.add_argument('--n-splits', type=int, default=5)
-    p.add_argument('--seed', type=int, default=42)
     return p
 
 
-def build_model():
+def build_model(_seed: int):
     return Pipeline([
         ('scaler', StandardScaler()),
         ('model', SVR(C=10.0, gamma='scale', epsilon=0.1, kernel='rbf')),
@@ -30,12 +29,13 @@ def main():
     X, y, _ = data_loader.split(ds)
     print(f"Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}")
 
-    utils.run_kfold_regression(
+    utils.run_repeated_kfold_training(
         X,
         y,
-        model_factory=build_model,
+        build_model,
+        feature_names=None,
+        model_name='svm',
         n_splits=args.n_splits,
-        seed=args.seed,
     )
 
 

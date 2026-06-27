@@ -10,6 +10,7 @@ from train_random_forest import build_model as build_rf
 from train_random_tree import build_model as build_randomtree
 from train_svm import build_model as build_svm
 from train_xgboost import build_model as build_xgb
+from sklearn.linear_model import LinearRegression
 
 AVAILABLE_MODELS = (
     'catboost',
@@ -18,6 +19,7 @@ AVAILABLE_MODELS = (
     'svm',
     'lgbm',
     'randomtree',
+    'linear',
 )
 
 def build_parser():
@@ -29,13 +31,6 @@ def build_parser():
     )
     p.add_argument('--dataset', default='southwest', help='southwest, kaggle, or dataset path')
     p.add_argument('--n-splits', type=int, default=5, help='Number of CV folds')
-    p.add_argument(
-        '--seeds',
-        type=int,
-        nargs='+',
-        default=list(utils.DEFAULT_SEEDS),
-        help='Random seeds for fold shuffling (default: 42 52 62 72 82)',
-    )
     p.add_argument(
         '--models',
         nargs='+',
@@ -63,9 +58,10 @@ def model_factories(n_features: int, models: list[str]):
         'catboost': build_catboost,
         'xgb': build_xgb,
         'rf': build_rf,
-        'svm': lambda _seed: build_svm(),
+        'svm': build_svm,
         'lgbm': build_lgbm,
         'randomtree': lambda seed: build_randomtree(seed, n_features),
+        'linear': lambda _seed: LinearRegression(),
     }
     return {name: all_factories[name] for name in models}
 
@@ -83,7 +79,6 @@ def main():
         y,
         factories=model_factories(X.shape[1], args.models),
         n_splits=args.n_splits,
-        seeds=args.seeds,
         include_ensemble=args.ensemble,
     )
 
