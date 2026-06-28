@@ -107,7 +107,7 @@ def main():
         n_splits=args.n_splits,
         verbose=False,
     )
-    utils.print_comparison_table(pd.concat([default_summary, tuned_summary], ignore_index=True))
+    evaluation.print_comparison_table(pd.concat([default_summary, tuned_summary], ignore_index=True))
 
 
 if __name__ == '__main__':

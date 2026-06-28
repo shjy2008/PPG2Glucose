@@ -9,7 +9,6 @@ from sklearn.model_selection import KFold
 import evaluation
 from config import DEFAULT_SEEDS, TARGET_OUTLIER_LOWER_Q, TARGET_OUTLIER_UPPER_Q
 
-# Labels store glucose in mg/dL; convert to mmol/L for modeling and reporting.
 MG_DL_TO_MMOL_L = 1.0 / 18.0
 
 
@@ -29,29 +28,26 @@ def safe_float(value):
 def _target_outlier_mask(y):
     values = np.asarray(y, dtype=float)
     lower, upper = np.quantile(values, [TARGET_OUTLIER_LOWER_Q, TARGET_OUTLIER_UPPER_Q])
-    mask = (values >= lower) & (values <= upper)
-    return mask, lower, upper
+    return (values >= lower) & (values <= upper), lower, upper
 
 
-def exclude_target_outliers(X: pd.DataFrame, y: pd.Series) -> tuple[pd.DataFrame, pd.Series]:
-    mask, lower, upper = _target_outlier_mask(y)
-    n_removed = int((~mask).sum())
+def _log_outlier_exclusion(n_removed: int, lower: float, upper: float) -> None:
     if n_removed:
         print(
             f'Excluded {n_removed} target outlier(s) outside '
             f'[{lower:.4f}, {upper:.4f}] mmol/L'
         )
+
+
+def exclude_target_outliers(X: pd.DataFrame, y: pd.Series) -> tuple[pd.DataFrame, pd.Series]:
+    mask, lower, upper = _target_outlier_mask(y)
+    _log_outlier_exclusion(int((~mask).sum()), lower, upper)
     return X.loc[mask].reset_index(drop=True), y.loc[mask].reset_index(drop=True)
 
 
 def exclude_target_outlier_arrays(y: np.ndarray, *arrays: np.ndarray) -> tuple[np.ndarray, ...]:
     mask, lower, upper = _target_outlier_mask(y)
-    n_removed = int((~mask).sum())
-    if n_removed:
-        print(
-            f'Excluded {n_removed} target outlier(s) outside '
-            f'[{lower:.4f}, {upper:.4f}] mmol/L'
-        )
+    _log_outlier_exclusion(int((~mask).sum()), lower, upper)
     return (y[mask], *(array[mask] for array in arrays))
 
 
@@ -64,6 +60,15 @@ def _prepare_xy(X: pd.DataFrame, y: pd.Series) -> tuple[pd.DataFrame, pd.Series]
     X = X.loc[mask].reset_index(drop=True)
     y = y.loc[mask].reset_index(drop=True)
     return X, y
+
+
+def _split_impute_tabular(
+    X: pd.DataFrame,
+    train_index: np.ndarray,
+    val_index: np.ndarray,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    X_train, X_val, _ = _impute_features(X.iloc[train_index], X.iloc[val_index])
+    return X_train, X_val
 
 
 def _impute_features(
@@ -97,6 +102,102 @@ def _normalized_feature_importances(model) -> Optional[np.ndarray]:
     return importances
 
 
+def _warn_nan_features(X: pd.DataFrame, verbose: bool) -> None:
+    if verbose and X.isna().any().any():
+        nan_columns = X.columns[X.isna().any()].tolist()
+        print(
+            f"Warning: imputing missing values in {len(nan_columns)} feature(s): "
+            f"{', '.join(nan_columns)}"
+        )
+
+
+def _run_repeated_kfold_cv(
+    y: np.ndarray,
+    run_fold: Callable[[np.ndarray, np.ndarray, int], Mapping[str, np.ndarray]],
+    model_names: Sequence[str],
+    *,
+    n_splits: int = 5,
+    seeds: Optional[Sequence[int]] = None,
+    verbose: bool = True,
+    fold_log: Optional[Callable[[Dict[str, dict]], str]] = None,
+) -> Tuple[Dict[str, list[dict]], Dict[str, np.ndarray]]:
+    y = np.asarray(y, dtype=float).reshape(-1)
+    if seeds is None:
+        seeds = DEFAULT_SEEDS
+
+    fold_metrics = {name: [] for name in model_names}
+    oof_sum = {name: np.zeros(len(y), dtype=float) for name in model_names}
+    oof_count = {name: np.zeros(len(y), dtype=float) for name in model_names}
+
+    for seed_index, seed in enumerate(seeds, start=1):
+        cv = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+        if verbose:
+            print(f'--- Seed {seed} ({seed_index}/{len(seeds)}) ---')
+
+        for fold_index, (train_index, val_index) in enumerate(cv.split(y), start=1):
+            predictions_by_model = run_fold(train_index, val_index, seed)
+            metrics_by_model = {}
+            for name in model_names:
+                predictions = predictions_by_model[name]
+                metrics = evaluation.evaluate_regression(y[val_index], predictions)
+                fold_metrics[name].append(metrics)
+                oof_sum[name][val_index] += predictions
+                oof_count[name][val_index] += 1.0
+                metrics_by_model[name] = metrics
+
+            if verbose:
+                metrics = next(iter(metrics_by_model.values()))
+                message = (
+                    fold_log(metrics_by_model)
+                    if fold_log is not None
+                    else (
+                        f'RMSE={metrics["rmse"]:.4f} mmol/L '
+                        f'MAE={metrics["mae"]:.4f} mmol/L R2={metrics["r2"]:.4f}'
+                    )
+                )
+                print(f'  Fold {fold_index}: {message}')
+
+    oof_by_model = {name: oof_sum[name] / oof_count[name] for name in model_names}
+    return fold_metrics, oof_by_model
+
+
+def run_repeated_kfold_array_cv(
+    y: np.ndarray,
+    predict_fold: Callable[[np.ndarray, np.ndarray, int], np.ndarray],
+    *,
+    model_name: str = 'model',
+    n_splits: int = 5,
+    seeds: Optional[Sequence[int]] = None,
+    print_target_distribution: bool = True,
+    verbose: bool = True,
+) -> Tuple[list[dict], pd.DataFrame, np.ndarray]:
+    y = np.asarray(y, dtype=float).reshape(-1)
+    if seeds is None:
+        seeds = DEFAULT_SEEDS
+
+    if verbose and print_target_distribution:
+        evaluation.print_cv_intro(y, n_splits, seeds)
+
+    fold_metrics_by_model, oof_by_model = _run_repeated_kfold_cv(
+        y,
+        lambda train_index, val_index, seed: {
+            model_name: predict_fold(train_index, val_index, seed),
+        },
+        [model_name],
+        n_splits=n_splits,
+        seeds=seeds,
+        verbose=verbose,
+    )
+    fold_metrics_by_model, summary_df, oof_predictions = evaluation.report_cv(
+        fold_metrics_by_model,
+        oof_by_model,
+        y,
+        plot_model=model_name,
+        verbose=verbose,
+    )
+    return fold_metrics_by_model[model_name], summary_df, oof_predictions
+
+
 def run_repeated_kfold_comparison(
     X: pd.DataFrame,
     y: pd.Series,
@@ -106,114 +207,60 @@ def run_repeated_kfold_comparison(
     ensemble_name: str = 'ensemble',
     verbose: bool = True,
 ) -> Tuple[Dict[str, list[dict]], pd.DataFrame]:
-    """Compare multiple regressors with repeated k-fold cross-validation.
-
-    Fairness guarantees:
-    - Within each seed, every model uses the exact same train/validation splits.
-    - Missing values are median-imputed per fold using training data only.
-    - Stochastic models should consume the current seed via their factory.
-
-    Returns:
-        fold_metrics_by_model: per-model list of metric dicts (one per fold × seed)
-        summary_df: mean ± std of per-fold scores
-    """
     X, y = _prepare_xy(X, y)
     seeds = DEFAULT_SEEDS
     model_names = list(factories.keys())
     use_ensemble = include_ensemble and len(model_names) > 1
     tracked_names = [*model_names, ensemble_name] if use_ensemble else model_names
+    y_values = y.values
 
-    if X.isna().any().any() and verbose:
-        nan_columns = X.columns[X.isna().any()].tolist()
-        print(
-            f"Warning: imputing missing values in {len(nan_columns)} feature(s): "
-            f"{', '.join(nan_columns)}"
-        )
-
+    _warn_nan_features(X, verbose)
     if verbose:
-        evaluation.print_target_stats(y.values)
-        total_runs = len(seeds) * n_splits
-        print(
-            f'\nRepeated CV: {n_splits}-fold × {len(seeds)} seeds '
-            f'= {total_runs} evaluations per model'
+        extras = [f'Ensemble: mean of {", ".join(model_names)}'] if use_ensemble else []
+        evaluation.print_cv_intro(
+            y_values,
+            n_splits,
+            seeds,
+            per_model=True,
+            models=model_names,
+            extra_lines=extras,
         )
-        print(f'Models: {", ".join(model_names)}')
+
+    def run_fold(train_index: np.ndarray, val_index: np.ndarray, seed: int) -> Dict[str, np.ndarray]:
+        X_train, X_val = _split_impute_tabular(X, train_index, val_index)
+        y_train = y.iloc[train_index]
+
+        predictions_by_model: Dict[str, np.ndarray] = {}
+        fold_predictions = []
+        for name in model_names:
+            model = factories[name](seed)
+            model.fit(X_train, y_train)
+            predictions = model.predict(X_val)
+            fold_predictions.append(predictions)
+            predictions_by_model[name] = predictions
+
         if use_ensemble:
-            print(f'Ensemble: mean of {", ".join(model_names)}')
-        print(f'Seeds: {list(seeds)}\n')
+            predictions_by_model[ensemble_name] = np.mean(fold_predictions, axis=0)
+        return predictions_by_model
 
-    fold_metrics_by_model: Dict[str, list[dict]] = {name: [] for name in tracked_names}
-
-    for seed_index, seed in enumerate(seeds, start=1):
-        cv = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
-        if verbose:
-            print(f'--- Seed {seed} ({seed_index}/{len(seeds)}) ---')
-
-        for fold_index, (train_index, val_index) in enumerate(cv.split(X, y), start=1):
-            X_train = X.iloc[train_index]
-            y_train = y.iloc[train_index]
-            X_val = X.iloc[val_index]
-            y_val = y.iloc[val_index]
-            X_train, X_val, _ = _impute_features(X_train, X_val)
-
-            fold_line = []
-            fold_predictions = []
-            for name in model_names:
-                model = factories[name](seed)
-                model.fit(X_train, y_train)
-                predictions = model.predict(X_val)
-                fold_predictions.append(predictions)
-
-                metrics = evaluation.evaluate_regression(y_val.values, predictions)
-                fold_metrics_by_model[name].append(metrics)
-                fold_line.append(f'{name} MAE={metrics["mae"]:.4f}')
-
-            if use_ensemble:
-                ensemble_predictions = np.mean(fold_predictions, axis=0)
-                ensemble_metrics = evaluation.evaluate_regression(
-                    y_val.values,
-                    ensemble_predictions,
-                )
-                fold_metrics_by_model[ensemble_name].append(ensemble_metrics)
-                fold_line.append(f'{ensemble_name} MAE={ensemble_metrics["mae"]:.4f}')
-
-            if verbose:
-                print(f'  Fold {fold_index}: {" | ".join(fold_line)}')
-
-    summary_rows = []
-    for name in tracked_names:
-        summary = evaluation.summarize_repeated_cv_metrics(fold_metrics_by_model[name])
-        summary_rows.append({
-            'model': name,
-            'n_evaluations': summary['mae']['n'],
-            'mae_mean': summary['mae']['mean'],
-            'mae_std': summary['mae']['std'],
-            'rmse_mean': summary['rmse']['mean'],
-            'rmse_std': summary['rmse']['std'],
-            'r2_mean': summary['r2']['mean'],
-            'r2_std': summary['r2']['std'],
-            'acc_mean': 100.0 * summary['acc']['mean'],
-            'acc_std': 100.0 * summary['acc']['std'],
-            'mard_mean': summary['mard']['mean'],
-            'mard_std': summary['mard']['std'],
-            'zone_a_mean': 100.0 * summary['zone_a']['mean'],
-            'zone_a_std': 100.0 * summary['zone_a']['std'],
-            'zone_b_mean': 100.0 * summary['zone_b']['mean'],
-            'zone_b_std': 100.0 * summary['zone_b']['std'],
-        })
-
-    summary_df = pd.DataFrame(summary_rows).reset_index(drop=True)
-
-    if verbose:
-        print_cv_results(summary_df)
-
+    fold_metrics_by_model, oof_by_model = _run_repeated_kfold_cv(
+        y_values,
+        run_fold,
+        tracked_names,
+        n_splits=n_splits,
+        seeds=seeds,
+        verbose=verbose,
+        fold_log=lambda metrics_by_model: ' | '.join(
+            f'{name} MAE={metrics["mae"]:.4f}' for name, metrics in metrics_by_model.items()
+        ),
+    )
+    _, summary_df, _ = evaluation.report_cv(
+        fold_metrics_by_model,
+        oof_by_model,
+        y_values,
+        verbose=verbose,
+    )
     return fold_metrics_by_model, summary_df
-
-
-def _top_feature_indices(model, n_features: int, top_n: int) -> np.ndarray:
-    importances = np.asarray(model.feature_importances_, dtype=float)
-    ranked = np.argsort(importances)[::-1]
-    return ranked[: min(top_n, n_features)]
 
 
 def run_repeated_kfold_training(
@@ -226,124 +273,81 @@ def run_repeated_kfold_training(
     select_top_n: Optional[int] = None,
     verbose: bool = True,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Repeated k-fold CV for one model: metrics and optional feature importances.
-
-    Uses the same fold splits, imputation, and seed handling as
-    run_repeated_kfold_comparison. Each fold fit contributes one validation
-    score and one normalized feature-importance vector when available.
-
-    When select_top_n is set (and less than the feature count), feature ranking
-    is fit on each training fold only, then the model is refit on those columns.
-    """
     X, y = _prepare_xy(X, y)
     seeds = DEFAULT_SEEDS
+    y_values = y.values
     track_importances = feature_names is not None and len(feature_names) > 0
-    if track_importances:
-        accum = np.zeros(len(feature_names), dtype=float)
-        selection_counts = np.zeros(len(feature_names), dtype=int)
-    fold_metrics: list[dict] = []
-    oof_sum = np.zeros(len(y), dtype=float)
-    oof_count = np.zeros(len(y), dtype=float)
-    n_runs = 0
-    importance_runs = 0
     use_selection = (
         select_top_n is not None
         and track_importances
         and select_top_n < X.shape[1]
     )
 
-    if X.isna().any().any() and verbose:
-        nan_columns = X.columns[X.isna().any()].tolist()
-        print(
-            f"Warning: imputing missing values in {len(nan_columns)} feature(s): "
-            f"{', '.join(nan_columns)}"
-        )
+    accum = np.zeros(len(feature_names), dtype=float) if track_importances else None
+    selection_counts = np.zeros(len(feature_names), dtype=int) if track_importances else None
+    importance_runs = 0
+    n_runs = 0
 
+    _warn_nan_features(X, verbose)
     if verbose:
-        evaluation.print_target_stats(y.values)
-        total_runs = len(seeds) * n_splits
-        print(
-            f'\nRepeated CV: {n_splits}-fold × {len(seeds)} seeds '
-            f'= {total_runs} evaluations'
-        )
+        extras = []
         if use_selection:
-            print(f'Feature selection: top {select_top_n} per fold (train-only ranking)')
-        print(f'Seeds: {list(seeds)}\n')
+            extras.append(f'Feature selection: top {select_top_n} per fold (train-only ranking)')
+        evaluation.print_cv_intro(y_values, n_splits, seeds, extra_lines=extras)
 
-    for seed_index, seed in enumerate(seeds, start=1):
-        cv = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
-        if verbose:
-            print(f'--- Seed {seed} ({seed_index}/{len(seeds)}) ---')
+    def run_fold(train_index: np.ndarray, val_index: np.ndarray, seed: int) -> Dict[str, np.ndarray]:
+        nonlocal accum, selection_counts, importance_runs, n_runs
 
-        for fold_index, (train_index, val_index) in enumerate(cv.split(X, y), start=1):
-            X_train = X.iloc[train_index]
-            y_train = y.iloc[train_index]
-            X_val = X.iloc[val_index]
-            y_val = y.iloc[val_index]
-            X_train, X_val, _ = _impute_features(X_train, X_val)
+        X_train, X_val = _split_impute_tabular(X, train_index, val_index)
+        y_train = y.iloc[train_index]
 
-            if use_selection:
-                selector = model_factory(seed)
-                selector.fit(X_train, y_train)
-                selected_idx = _top_feature_indices(selector, X_train.shape[1], select_top_n)
-                selected_columns = X_train.columns[selected_idx]
-                selection_counts[selected_idx] += 1
+        if use_selection:
+            selector = model_factory(seed)
+            selector.fit(X_train, y_train)
+            importances = np.asarray(selector.feature_importances_, dtype=float)
+            selected_idx = np.argsort(importances)[::-1][: min(select_top_n, X_train.shape[1])]
+            selected_columns = X_train.columns[selected_idx]
+            selection_counts[selected_idx] += 1
 
-                model = model_factory(seed)
-                model.fit(X_train[selected_columns], y_train)
-                predictions = model.predict(X_val[selected_columns])
-                importances = np.zeros(len(feature_names), dtype=float)
-                fold_importances = np.asarray(model.feature_importances_, dtype=float)
-                total = fold_importances.sum()
-                if total > 0:
-                    fold_importances = fold_importances / total
+            model = model_factory(seed)
+            model.fit(X_train[selected_columns], y_train)
+            predictions = model.predict(X_val[selected_columns])
+            fold_importances = _normalized_feature_importances(model)
+            importances = np.zeros(len(feature_names), dtype=float)
+            if fold_importances is not None:
                 importances[selected_idx] = fold_importances
-            else:
-                model = model_factory(seed)
-                model.fit(X_train, y_train)
-                predictions = model.predict(X_val)
-                importances = _normalized_feature_importances(model)
+        else:
+            model = model_factory(seed)
+            model.fit(X_train, y_train)
+            predictions = model.predict(X_val)
+            importances = _normalized_feature_importances(model)
 
-            metrics = evaluation.evaluate_regression(y_val.values, predictions)
-            fold_metrics.append(metrics)
-            if track_importances and importances is not None:
-                accum += importances
-                importance_runs += 1
-            oof_sum[val_index] += predictions
-            oof_count[val_index] += 1.0
-            n_runs += 1
+        if track_importances and importances is not None:
+            accum += importances
+            importance_runs += 1
+        n_runs += 1
+        return {model_name: predictions}
 
-            if verbose:
-                print(
-                    f'  Fold {fold_index}: RMSE={metrics["rmse"]:.4f} mmol/L '
-                    f'MAE={metrics["mae"]:.4f} mmol/L R2={metrics["r2"]:.4f}'
-                )
-
-    summary = evaluation.summarize_repeated_cv_metrics(fold_metrics)
-    summary_df = pd.DataFrame([{
-        'model': model_name,
-        'n_evaluations': summary['mae']['n'],
-        'mae_mean': summary['mae']['mean'],
-        'mae_std': summary['mae']['std'],
-        'rmse_mean': summary['rmse']['mean'],
-        'rmse_std': summary['rmse']['std'],
-        'r2_mean': summary['r2']['mean'],
-        'r2_std': summary['r2']['std'],
-        'acc_mean': 100.0 * summary['acc']['mean'],
-        'acc_std': 100.0 * summary['acc']['std'],
-        'mard_mean': summary['mard']['mean'],
-        'mard_std': summary['mard']['std'],
-        'zone_a_mean': 100.0 * summary['zone_a']['mean'],
-        'zone_a_std': 100.0 * summary['zone_a']['std'],
-        'zone_b_mean': 100.0 * summary['zone_b']['mean'],
-        'zone_b_std': 100.0 * summary['zone_b']['std'],
-    }])
+    fold_metrics_by_model, oof_by_model = _run_repeated_kfold_cv(
+        y_values,
+        run_fold,
+        [model_name],
+        n_splits=n_splits,
+        seeds=seeds,
+        verbose=verbose,
+    )
+    _, summary_df, oof_predictions = evaluation.report_cv(
+        fold_metrics_by_model,
+        oof_by_model,
+        y_values,
+        plot_model=model_name,
+        verbose=False,
+    )
 
     if track_importances and importance_runs > 0:
-        mean_importance = accum / importance_runs
         importance_df = pd.DataFrame({
             'feature': list(feature_names),
-            'importance': mean_importance,
+            'importance': accum / importance_runs,
         }).sort_values('importance', ascending=False).reset_index(drop=True)
     else:
         importance_df = pd.DataFrame(columns=['feature', 'importance'])
@@ -353,8 +357,7 @@ def run_repeated_kfold_training(
             freq = pd.DataFrame({
                 'feature': list(feature_names),
                 'selected_in_folds': selection_counts,
-            })
-            freq = freq.sort_values(
+            }).sort_values(
                 ['selected_in_folds', 'feature'],
                 ascending=[False, True],
             ).reset_index(drop=True)
@@ -367,83 +370,6 @@ def run_repeated_kfold_training(
                     index=False,
                 )
             )
-
-        oof_predictions = oof_sum / oof_count
-        print_cv_results(summary_df, y.values, oof_predictions)
+        evaluation.print_cv_results(summary_df, y_values, oof_predictions)
 
     return summary_df, importance_df
-
-
-def aggregate_feature_importances(
-    X: pd.DataFrame,
-    y: pd.Series,
-    feature_names: Sequence[str],
-    model_factory: Callable[[int], object],
-    n_splits: int = 5,
-) -> pd.DataFrame:
-    """Mean normalized feature importances over repeated k-fold fits."""
-    _, importance_df = run_repeated_kfold_training(
-        X,
-        y,
-        model_factory,
-        feature_names,
-        n_splits=n_splits,
-        verbose=False,
-    )
-    return importance_df
-
-
-def print_cv_results(
-    summary_df: pd.DataFrame,
-    y_true: Optional[np.ndarray] = None,
-    y_pred: Optional[np.ndarray] = None,
-    preview_n: int = 10,
-) -> None:
-    """Print unified CV metrics (mean ± std) and optional Clarke/SEG plots."""
-    n_evaluations = int(summary_df['n_evaluations'].iloc[0])
-    n_models = len(summary_df)
-    if n_models == 1:
-        print(
-            f'\n=== Cross-validation results (mean ± std, N={n_evaluations}) ==='
-        )
-    else:
-        print(
-            f'\n=== Cross-validation results (mean ± std, N={n_evaluations} per model) ==='
-        )
-    print_comparison_table(summary_df)
-
-    if y_true is None or y_pred is None:
-        return
-
-    evaluation.print_clarke_plot(y_true, y_pred)
-
-    preview = pd.DataFrame({
-        'actual (mmol/L)': np.asarray(y_true).reshape(-1),
-        'predicted (mmol/L)': np.asarray(y_pred).reshape(-1),
-    })
-    print('\nPredictions preview:')
-    print(preview.head(preview_n).to_string(index=False))
-
-
-def print_comparison_table(summary_df: pd.DataFrame) -> None:
-    """Pretty-print a repeated-CV comparison table."""
-    rows = []
-    for _, row in summary_df.iterrows():
-        rows.append({
-            'Model': row['model'],
-            'MAE (mmol/L)': evaluation.format_metric_summary(row['mae_mean'], row['mae_std']),
-            'RMSE (mmol/L)': evaluation.format_metric_summary(row['rmse_mean'], row['rmse_std']),
-            'R2': evaluation.format_metric_summary(row['r2_mean'], row['r2_std']),
-            'ACC (%)': evaluation.format_metric_summary(row['acc_mean'], row['acc_std'], decimals=2),
-            'MARD (%)': evaluation.format_metric_summary(
-                row['mard_mean'], row['mard_std'], decimals=2
-            ),
-            'Zone A (%)': evaluation.format_metric_summary(
-                row['zone_a_mean'], row['zone_a_std'], decimals=2
-            ),
-            'Zone B (%)': evaluation.format_metric_summary(
-                row['zone_b_mean'], row['zone_b_std'], decimals=2
-            ),
-            'N': int(row['n_evaluations']),
-        })
-    print(pd.DataFrame(rows).to_string(index=False))

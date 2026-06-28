@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Union
+from typing import Dict, Mapping, Optional, Sequence, Union
 
 import matplotlib
 
@@ -10,6 +10,7 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from scipy.stats import pearsonr
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
 MMOL_L_TO_MG_DL = 18.0
@@ -272,17 +273,36 @@ def glucose_mard(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     return float(100.0 * np.mean(np.abs((y_pred[mask] - y_true[mask]) / y_true[mask])))
 
 
+def format_pearson_p(p_value: float) -> str:
+    if np.isnan(p_value):
+        return 'p=nan'
+    if p_value < 0.001:
+        return 'p<0.001'
+    return f'p={p_value:.4g}'
+
+
+def format_pearson_summary(r: float, p_value: float) -> str:
+    return f'{r:.4f} ({format_pearson_p(p_value)})'
+
+
 def evaluate_regression(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     y_true = np.asarray(y_true)
     y_pred = np.asarray(y_pred)
     rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
     mae = float(mean_absolute_error(y_true, y_pred))
     r2 = float(r2_score(y_true, y_pred))
+    if y_true.size < 2:
+        pearson_r, pearson_p = np.nan, np.nan
+    else:
+        pearson_r, pearson_p = pearsonr(y_true, y_pred)
+        pearson_r, pearson_p = float(pearson_r), float(pearson_p)
     zone_fractions = clarke_zone_fractions(y_true, y_pred)
     return {
         'rmse': rmse,
         'mae': mae,
         'r2': r2,
+        'pearson_r': pearson_r,
+        'pearson_p': pearson_p,
         'acc': glucose_prediction_acc(y_true, y_pred),
         'mard': glucose_mard(y_true, y_pred),
         'zone_a': zone_fractions['zone_a'],
@@ -296,35 +316,6 @@ def print_clarke_plot(y_true: np.ndarray, y_pred: np.ndarray) -> None:
     plot_seg_error_grid(y_true, y_pred, save_path=SEG_PLOT_PATH)
     print(f'\nClarke Error Grid plot saved to {CLARKE_PLOT_PATH}')
     print(f'Surveillance Error Grid plot saved to {SEG_PLOT_PATH}')
-
-
-def print_regression_report(
-    y_true: np.ndarray,
-    y_pred: np.ndarray,
-    preview_n: int = 10,
-) -> None:
-    metrics = evaluate_regression(y_true, y_pred)
-    unit = 'mmol/L'
-    print('\nEvaluation:')
-    print(f"RMSE ({unit}): {metrics['rmse']:.4f}")
-    print(f"MAE ({unit}):  {metrics['mae']:.4f}")
-    print(f"R2:   {metrics['r2']:.4f}")
-    print(f"ACC (%): {100.0 * metrics['acc']:.2f}")
-    print(f"MARD (%): {metrics['mard']:.2f}")
-    print('Clarke Error Grid:')
-    print(f"Zone A (%): {100.0 * metrics['zone_a']:.2f}")
-    print(f"Zone B (%): {100.0 * metrics['zone_b']:.2f}")
-    print(
-        f"Zone A+B (%): {100.0 * (metrics['zone_a'] + metrics['zone_b']):.2f}"
-    )
-    print_clarke_plot(y_true, y_pred)
-
-    preview = pd.DataFrame({
-        f'actual ({unit})': np.asarray(y_true).reshape(-1),
-        f'predicted ({unit})': np.asarray(y_pred).reshape(-1),
-    })
-    print('\nPredictions preview:')
-    print(preview.head(preview_n).to_string(index=False))
 
 
 def summarize_metric_values(values: np.ndarray) -> dict:
@@ -351,6 +342,7 @@ def summarize_repeated_cv_metrics(
         'rmse',
         'mae',
         'r2',
+        'pearson_r',
         'acc',
         'mard',
         'zone_a',
@@ -366,14 +358,125 @@ def summarize_repeated_cv_metrics(
     }
 
 
-def feature_importances_df(model, feature_names):
-    # Works for XGBoost and sklearn estimators that expose feature_importances_
-    estimator = model
-    if hasattr(estimator, 'named_steps'):
-        # prefer explicit 'model' step, otherwise take last step
-        named_steps = getattr(estimator, 'named_steps')
-        estimator = named_steps.get('model', list(named_steps.values())[-1])
-    if not hasattr(estimator, 'feature_importances_'):
-        return None
-    importances = estimator.feature_importances_
-    return pd.DataFrame({'feature': feature_names, 'importance': importances}).sort_values('importance', ascending=False)
+def cv_summary_row(
+    fold_metrics: list[dict],
+    y: np.ndarray,
+    oof_predictions: np.ndarray,
+    model_name: str,
+) -> dict:
+    summary = summarize_repeated_cv_metrics(fold_metrics)
+    oof_metrics = evaluate_regression(y, oof_predictions)
+    return {
+        'model': model_name,
+        'n_evaluations': summary['mae']['n'],
+        'mae_mean': summary['mae']['mean'],
+        'mae_std': summary['mae']['std'],
+        'rmse_mean': summary['rmse']['mean'],
+        'rmse_std': summary['rmse']['std'],
+        'r2_mean': summary['r2']['mean'],
+        'r2_std': summary['r2']['std'],
+        'pearson_r_mean': summary['pearson_r']['mean'],
+        'pearson_r_std': summary['pearson_r']['std'],
+        'pearson_oof_r': oof_metrics['pearson_r'],
+        'pearson_oof_p': oof_metrics['pearson_p'],
+        'acc_mean': 100.0 * summary['acc']['mean'],
+        'acc_std': 100.0 * summary['acc']['std'],
+        'mard_mean': summary['mard']['mean'],
+        'mard_std': summary['mard']['std'],
+        'zone_a_mean': 100.0 * summary['zone_a']['mean'],
+        'zone_a_std': 100.0 * summary['zone_a']['std'],
+        'zone_b_mean': 100.0 * summary['zone_b']['mean'],
+        'zone_b_std': 100.0 * summary['zone_b']['std'],
+    }
+
+
+def cv_summary_df(
+    fold_metrics_by_model: Mapping[str, list[dict]],
+    y: np.ndarray,
+    oof_by_model: Mapping[str, np.ndarray],
+) -> pd.DataFrame:
+    return pd.DataFrame([
+        cv_summary_row(fold_metrics_by_model[name], y, oof_by_model[name], name)
+        for name in fold_metrics_by_model
+    ])
+
+
+def print_cv_intro(
+    y: np.ndarray,
+    n_splits: int,
+    seeds: Sequence[int],
+    *,
+    per_model: bool = False,
+    models: Optional[Sequence[str]] = None,
+    extra_lines: Sequence[str] = (),
+) -> None:
+    print_target_stats(y)
+    total_runs = len(seeds) * n_splits
+    scope = ' per model' if per_model else ''
+    print(f'\nRepeated CV: {n_splits}-fold × {len(seeds)} seeds = {total_runs} evaluations{scope}')
+    if models:
+        print(f'Models: {", ".join(models)}')
+    for line in extra_lines:
+        print(line)
+    print(f'Seeds: {list(seeds)}\n')
+
+
+def report_cv(
+    fold_metrics_by_model: Mapping[str, list[dict]],
+    oof_by_model: Mapping[str, np.ndarray],
+    y: np.ndarray,
+    *,
+    plot_model: Optional[str] = None,
+    verbose: bool = True,
+) -> tuple[Dict[str, list[dict]], pd.DataFrame, Optional[np.ndarray]]:
+    summary_df = cv_summary_df(fold_metrics_by_model, y, oof_by_model)
+    oof_predictions = oof_by_model[plot_model] if plot_model else None
+    if verbose:
+        print_cv_results(
+            summary_df,
+            y if oof_predictions is not None else None,
+            oof_predictions,
+        )
+    return fold_metrics_by_model, summary_df, oof_predictions
+
+
+def print_comparison_table(summary_df: pd.DataFrame) -> None:
+    rows = []
+    for _, row in summary_df.iterrows():
+        rows.append({
+            'Model': row['model'],
+            'MAE (mmol/L)': format_metric_summary(row['mae_mean'], row['mae_std']),
+            'RMSE (mmol/L)': format_metric_summary(row['rmse_mean'], row['rmse_std']),
+            'R2': format_metric_summary(row['r2_mean'], row['r2_std']),
+            'Pearson r': format_pearson_summary(row['pearson_oof_r'], row['pearson_oof_p']),
+            'ACC (%)': format_metric_summary(row['acc_mean'], row['acc_std'], decimals=2),
+            'MARD (%)': format_metric_summary(row['mard_mean'], row['mard_std'], decimals=2),
+            'Zone A (%)': format_metric_summary(row['zone_a_mean'], row['zone_a_std'], decimals=2),
+            'Zone B (%)': format_metric_summary(row['zone_b_mean'], row['zone_b_std'], decimals=2),
+            'N': int(row['n_evaluations']),
+        })
+    print(pd.DataFrame(rows).to_string(index=False))
+
+
+def print_cv_results(
+    summary_df: pd.DataFrame,
+    y_true: Optional[np.ndarray] = None,
+    y_pred: Optional[np.ndarray] = None,
+    preview_n: int = 10,
+) -> None:
+    n_evaluations = int(summary_df['n_evaluations'].iloc[0])
+    label = 'per model' if len(summary_df) > 1 else ''
+    suffix = f' {label}' if label else ''
+    print(f'\n=== Cross-validation results (mean ± std, N={n_evaluations}{suffix}) ===')
+    print_comparison_table(summary_df)
+
+    if y_true is None or y_pred is None:
+        return
+
+    print_clarke_plot(y_true, y_pred)
+    preview = pd.DataFrame({
+        'actual (mmol/L)': np.asarray(y_true).reshape(-1),
+        'predicted (mmol/L)': np.asarray(y_pred).reshape(-1),
+    })
+    print('\nPredictions preview:')
+    print(preview.head(preview_n).to_string(index=False))

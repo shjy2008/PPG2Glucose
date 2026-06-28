@@ -6,8 +6,8 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
-import evaluation
 import data_loader
+import utils
 from config import tensor_to_numpy, torch_device, torch_float_tensor
 
 
@@ -188,7 +188,7 @@ def run_fold(
     args,
     device: torch.device,
     demographics: Optional[np.ndarray] = None,
-) -> tuple[dict, np.ndarray]:
+) -> np.ndarray:
     X_train, X_val = X[train_index], X[val_index]
     y_train, y_val = y[train_index], y[val_index]
     X_train, X_val = standardize_train_test(X_train, X_val)
@@ -221,14 +221,15 @@ def run_fold(
     )
 
     predictions = predict(model, val_loader, device, use_demographics=use_demographics)
-    metrics = evaluation.evaluate_regression(y_val, predictions)
-    return metrics, predictions
+    return predictions
 
 
 def main():
     args = build_parser().parse_args()
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
+
+    device = torch_device()
 
     print(f'Using dataset: {args.dataset}')
     signals, demographics, y = data_loader.load_waveform_dataset(
@@ -241,31 +242,20 @@ def main():
         f'Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}, '
         f'waveform_length: {signals.shape[1]}, input_length: {X.shape[1]}'
     )
-    evaluation.print_target_stats(y)
 
-    splitter = data_loader.get_kfold(n_splits=args.n_splits, seed=args.seed)
-    device = torch_device()
-    fold_metrics = []
-    oof_predictions = np.empty(len(y), dtype=np.float32)
-
-    for fold_index, (train_index, val_index) in enumerate(splitter.split(X, y), start=1):
-        metrics, predictions = run_fold(
+    def predict_fold(train_index: np.ndarray, val_index: np.ndarray, seed: int) -> np.ndarray:
+        torch.manual_seed(seed)
+        np.random.seed(seed)
+        return run_fold(
             X, y, train_index, val_index, args, device, demographics=demographics
         )
-        oof_predictions[val_index] = predictions
-        fold_metrics.append(metrics)
-        print(
-            f"Fold {fold_index}: RMSE={metrics['rmse']:.4f} mmol/L "
-            f"MAE={metrics['mae']:.4f} mmol/L R2={metrics['r2']:.4f}"
-        )
 
-    print('\nCross-validation summary:')
-    for metric_name in ('rmse', 'mae', 'r2'):
-        values = np.asarray([metrics[metric_name] for metrics in fold_metrics], dtype=float)
-        suffix = ' mmol/L' if metric_name in ('rmse', 'mae') else ''
-        print(f"{metric_name.upper()}{suffix}: {values.mean():.4f} ± {values.std(ddof=1):.4f}")
-
-    evaluation.print_regression_report(y, oof_predictions)
+    utils.run_repeated_kfold_array_cv(
+        y,
+        predict_fold,
+        model_name='cnn',
+        n_splits=args.n_splits,
+    )
 
 
 if __name__ == '__main__':
