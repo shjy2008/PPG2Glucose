@@ -208,7 +208,7 @@ def _frequency_domain_features(signal: np.ndarray, prefix: str) -> dict:
 
     centered = signal - np.mean(signal)
     spectrum = np.abs(np.fft.rfft(centered)) ** 2
-    fs = 100 # sampling frequency, assume 100 Hz for now
+    fs = 200 # sampling frequency, assume 200 Hz for now
     freqs = np.fft.rfftfreq(centered.size, d=1.0/fs)
     total_power = float(np.sum(spectrum))
     if total_power <= 1e-12:
