@@ -99,7 +99,7 @@ def _load_kaggle_dataset(labels_dir: Path, raw_data_dir: Path) -> pd.DataFrame:
         subject_id_int = int(subject_id)
 
         basic_info_dict = extract_basic_info(row)
-        if not basic_info_dict:
+        if BASIC_FEATURE_KEYS and not basic_info_dict:
             continue
 
         signal_path = _signal_path(raw_data_dir, subject_key, session_key)
@@ -139,7 +139,7 @@ def _load_southwest_dataset(root: Path) -> pd.DataFrame:
             continue
 
         basic_info_dict = extract_basic_info(row)
-        if not basic_info_dict:
+        if BASIC_FEATURE_KEYS and not basic_info_dict:
             continue
 
         subject_id_int = int(subject_id)
@@ -263,7 +263,7 @@ def _load_kaggle_waveform_dataset(
 
         if include_basic:
             basic_info_dict = extract_basic_info(row)
-            if not basic_info_dict:
+            if BASIC_FEATURE_KEYS and not basic_info_dict:
                 continue
             basic_values = np.asarray(
                 [basic_info_dict[key] for key in BASIC_FEATURE_KEYS],
@@ -331,7 +331,7 @@ def _load_southwest_waveform_dataset(
 
         if include_basic:
             basic_info_dict = extract_basic_info(row)
-            if not basic_info_dict:
+            if BASIC_FEATURE_KEYS and not basic_info_dict:
                 continue
             basic_values = np.asarray(
                 [basic_info_dict[key] for key in BASIC_FEATURE_KEYS],

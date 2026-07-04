@@ -3,7 +3,9 @@
 USE_GPU = False
 
 # Edit this list for tabular ML, CNN, LSTM, etc.
-BASIC_FEATURE_KEYS = ('age', 'bmi')
+BASIC_FEATURE_KEYS = ('age',)
+# BASIC_FEATURE_KEYS = ('age', 'bmi')
+# BASIC_FEATURE_KEYS = ('age', 'height', 'weight')
 # BASIC_FEATURE_KEYS = ('sex', 'age', 'height', 'weight')
 # BASIC_FEATURE_KEYS = ('age', 'height', 'weight', 'bmi')
 
