@@ -112,6 +112,18 @@ def clarke_zone_fractions(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, f
     }
 
 
+def _add_mg_dl_axes(ax: plt.Axes) -> None:
+    """Add mg/dL labels on the top (reference) and right (predicted) axes."""
+    mmol_to_mg = lambda values: values * MMOL_L_TO_MG_DL
+    mg_to_mmol = lambda values: values / MMOL_L_TO_MG_DL
+
+    ax_top = ax.secondary_xaxis('top', functions=(mmol_to_mg, mg_to_mmol))
+    ax_top.set_xlabel('Reference glucose (mg/dL)')
+
+    ax_right = ax.secondary_yaxis('right', functions=(mmol_to_mg, mg_to_mmol))
+    ax_right.set_ylabel('Predicted glucose (mg/dL)')
+
+
 def plot_clarke_error_grid(
     y_true: np.ndarray,
     y_pred: np.ndarray,
@@ -119,7 +131,7 @@ def plot_clarke_error_grid(
     title: str = 'Clarke Error Grid',
     save_path: Optional[Union[str, Path]] = None,
 ) -> None:
-    """Scatter plot with Clarke Error Grid zones (axes in mmol/L)."""
+    """Scatter plot with Clarke Error Grid zones (bottom/left mmol/L, top/right mg/dL)."""
     y_true = np.asarray(y_true, dtype=float).reshape(-1)
     y_pred = np.asarray(y_pred, dtype=float).reshape(-1)
     axis_max_mmol = CLARKE_AXIS_MAX_MG_DL / MMOL_L_TO_MG_DL
@@ -181,6 +193,7 @@ def plot_clarke_error_grid(
     ax.set_xlabel('Reference glucose (mmol/L)')
     ax.set_ylabel('Predicted glucose (mmol/L)')
     ax.set_title(title)
+    _add_mg_dl_axes(ax)
 
     if save_path is not None:
         fig.savefig(save_path, dpi=150, bbox_inches='tight')
@@ -209,7 +222,7 @@ def plot_seg_error_grid(
     title: str = 'Surveillance Error Grid',
     save_path: Optional[Union[str, Path]] = None,
 ) -> None:
-    """Scatter plot on the Surveillance Error Grid (axes in mmol/L)."""
+    """Scatter plot on the Surveillance Error Grid (bottom/left mmol/L, top/right mg/dL)."""
     y_true = np.asarray(y_true, dtype=float).reshape(-1)
     y_pred = np.asarray(y_pred, dtype=float).reshape(-1)
     axis_max_mmol = SEG_AXIS_MAX_MG_DL / MMOL_L_TO_MG_DL
@@ -243,6 +256,7 @@ def plot_seg_error_grid(
     ax.set_xlabel('Reference glucose (mmol/L)')
     ax.set_ylabel('Predicted glucose (mmol/L)')
     ax.set_title(title)
+    _add_mg_dl_axes(ax)
 
     cbar = fig.colorbar(image, ax=ax, fraction=0.046, pad=0.04)
     cbar.set_label('Risk level')
