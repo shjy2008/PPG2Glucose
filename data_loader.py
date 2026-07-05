@@ -22,6 +22,8 @@ def resolve_dataset_root(dataset: str | Path | None = None) -> Path:
         root = dataset
     elif dataset == 'MUST':
         root = Path('dataset/MUST')
+    elif dataset == 'vitaldb':
+        root = Path('dataset/vitaldb')
     elif dataset == 'southwest':
         root = Path('dataset/southwest')
     else:
@@ -32,13 +34,15 @@ def resolve_dataset_root(dataset: str | Path | None = None) -> Path:
 
 
 def dataset_layout(root: Path) -> str:
+    if (root / 'manifest.json').is_file() and (root / 'Labels').is_dir() and (root / 'RawData').is_dir():
+        return 'vitaldb'
     if (root / 'Labels').is_dir() and (root / 'RawData').is_dir():
         return 'MUST'
     if (root / 'bg_re.xlsx').is_file() and (root / 'ppg').is_dir():
         return 'southwest'
     raise RuntimeError(
         f'Unrecognized dataset layout under {root}. '
-        'Expected MUST (Labels/ + RawData/) or southwest (bg_re.xlsx + ppg/).'
+        'Expected vitaldb/MUST (Labels/ + RawData/) or southwest (bg_re.xlsx + ppg/).'
     )
 
 
@@ -58,23 +62,37 @@ def load_dataset(
     dataset: str | Path | None = None,
     labels_dir: Path | None = None,
     raw_data_dir: Path | None = None,
+    max_samples: int | None = None,
 ) -> pd.DataFrame:
     if labels_dir is not None or raw_data_dir is not None:
         if labels_dir is None or raw_data_dir is None:
             raise ValueError('labels_dir and raw_data_dir must both be provided')
-        return _load_must_dataset(labels_dir, raw_data_dir)
+        layout = 'MUST'
+        return _load_labels_rawdata_dataset(
+            labels_dir, raw_data_dir, layout, max_samples=max_samples,
+        )
 
     root = resolve_dataset_root(dataset)
     layout = dataset_layout(root)
-    if layout == 'MUST':
-        return _load_must_dataset(root / 'Labels', root / 'RawData')
+    if layout in {'MUST', 'vitaldb'}:
+        return _load_labels_rawdata_dataset(
+            root / 'Labels', root / 'RawData', layout, max_samples=max_samples,
+        )
     return _load_southwest_dataset(root)
 
 
-def _load_must_dataset(labels_dir: Path, raw_data_dir: Path) -> pd.DataFrame:
+def _load_labels_rawdata_dataset(
+    labels_dir: Path,
+    raw_data_dir: Path,
+    dataset_name: str,
+    max_samples: int | None = None,
+) -> pd.DataFrame:
     label_files = sorted(labels_dir.glob('label_*.csv'))
     if not label_files:
         raise RuntimeError(f'No label files found in {labels_dir}')
+    if max_samples is not None:
+        label_files = label_files[:max_samples]
+        print(f'Limited to {len(label_files)} sample(s)')
 
     records = []
     for label_path in label_files:
@@ -106,7 +124,7 @@ def _load_must_dataset(labels_dir: Path, raw_data_dir: Path) -> pd.DataFrame:
         if not signal_path.exists():
             print('Skipping', label_path.name, 'because signal file does not exist:', signal_path.name)
             continue
-        raw_ppg_dict = extract_raw_ppg(signal_path, fs=ppg_sampling_rate('MUST'))
+        raw_ppg_dict = extract_raw_ppg(signal_path, fs=ppg_sampling_rate(dataset_name))
 
         record = {
             'subject_ID': subject_id_int,
@@ -184,6 +202,7 @@ def load_waveform_dataset(
     signal_length: int = 0,
     include_basic: bool = True,
     resample: bool = False,
+    max_samples: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Load per-session PPG waveforms and glucose targets (mmol/L).
 
@@ -195,23 +214,27 @@ def load_waveform_dataset(
     if labels_dir is not None or raw_data_dir is not None:
         if labels_dir is None or raw_data_dir is None:
             raise ValueError('labels_dir and raw_data_dir must both be provided')
-        signals, demographics, targets = _load_must_waveform_dataset(
+        signals, demographics, targets = _load_labels_rawdata_waveform_dataset(
             labels_dir,
             raw_data_dir,
+            'MUST',
             signal_length=signal_length,
             include_basic=include_basic,
             resample=resample,
+            max_samples=max_samples,
         )
     else:
         root = resolve_dataset_root(dataset)
         layout = dataset_layout(root)
-        if layout == 'MUST':
-            signals, demographics, targets = _load_must_waveform_dataset(
+        if layout in {'MUST', 'vitaldb'}:
+            signals, demographics, targets = _load_labels_rawdata_waveform_dataset(
                 root / 'Labels',
                 root / 'RawData',
+                layout,
                 signal_length=signal_length,
                 include_basic=include_basic,
                 resample=resample,
+                max_samples=max_samples,
             )
         else:
             signals, demographics, targets = _load_southwest_waveform_dataset(
@@ -229,16 +252,21 @@ def load_waveform_dataset(
     return signals, demographics, targets
 
 
-def _load_must_waveform_dataset(
+def _load_labels_rawdata_waveform_dataset(
     labels_dir: Path,
     raw_data_dir: Path,
+    dataset_name: str,
     signal_length: int = 0,
     include_basic: bool = True,
     resample: bool = False,
+    max_samples: int | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     label_files = sorted(labels_dir.glob('label_*.csv'))
     if not label_files:
         raise RuntimeError(f'No label files found in {labels_dir}')
+    if max_samples is not None:
+        label_files = label_files[:max_samples]
+        print(f'Limited to {len(label_files)} sample(s)')
 
     pending = []
     lengths = []
@@ -426,7 +454,7 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', default='MUST', help='MUST or southwest')
+    parser.add_argument('--dataset', default='MUST', help='MUST, vitaldb, or southwest')
     cli_args = parser.parse_args()
 
     ds = load_dataset(cli_args.dataset)

@@ -37,13 +37,14 @@ DEFAULT_PARAMS = {
 
 def build_parser():
     p = argparse.ArgumentParser()
-    p.add_argument('--dataset', default='southwest', help='southwest or MUST')
+    p.add_argument('--dataset', default='southwest', help='southwest, MUST, or vitaldb')
     p.add_argument(
         '--params',
         default=None,
         help='JSON file with tuned hyperparameters (e.g. results/catboost_best_params.json)',
     )
     p.add_argument('--n-splits', type=int, default=5)
+    p.add_argument('--max-samples', type=int, default=None, help='Use only the first N label files')
     p.add_argument(
         '--select-top',
         type=int,
@@ -77,7 +78,7 @@ def build_model(seed: int, params: Optional[dict] = None):
 
 def main():
     args = build_parser().parse_args()
-    ds = data_loader.load_dataset(args.dataset)
+    ds = data_loader.load_dataset(args.dataset, max_samples=args.max_samples)
     print(f"Using dataset: {args.dataset}")
     X, y, feature_names = data_loader.split(ds)
     print(

@@ -16,6 +16,7 @@ DEFAULT_SEEDS = (42, 52, 62, 72, 82)
 PPG_SAMPLING_RATE = {
     'MUST': 2175,
     'southwest': 200,
+    'vitaldb': 100,
 }
 DEFAULT_PPG_SAMPLING_RATE = 200
 

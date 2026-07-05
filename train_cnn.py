@@ -13,8 +13,9 @@ from config import tensor_to_numpy, torch_device, torch_float_tensor
 
 def build_parser():
     p = argparse.ArgumentParser()
-    p.add_argument('--dataset', default='southwest', help='southwest or MUST')
+    p.add_argument('--dataset', default='southwest', help='southwest, MUST, or vitaldb')
     p.add_argument('--n-splits', type=int, default=5)
+    p.add_argument('--max-samples', type=int, default=None, help='Use only the first N label files')
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--epochs', type=int, default=25)
     p.add_argument('--batch-size', type=int, default=32)
@@ -236,6 +237,7 @@ def main():
         dataset=args.dataset,
         signal_length=args.signal_length,
         include_basic=args.include_basic,
+        max_samples=args.max_samples,
     )
     X = signals
     print(

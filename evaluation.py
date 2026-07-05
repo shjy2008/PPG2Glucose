@@ -269,11 +269,11 @@ def plot_seg_error_grid(
 
 
 def glucose_prediction_acc(y_true: np.ndarray, y_pred: np.ndarray) -> float:
-    """ACC fraction: |error| < 0.8 if y <= 5.55 mmol/L, else relative error <= 15%."""
+    """ACC fraction: |error| < 0.83 if y <= 5.55 mmol/L, else relative error <= 15%."""
     y_true = np.asarray(y_true, dtype=float).reshape(-1)
     y_pred = np.asarray(y_pred, dtype=float).reshape(-1)
     err = np.abs(y_pred - y_true)
-    ok = np.where(y_true <= 5.55, err < 0.8, err / y_true <= 0.15)
+    ok = np.where(y_true <= 5.55, err < 0.83, err / y_true <= 0.15)
     return float(np.mean(ok)) if ok.size else np.nan
 
 

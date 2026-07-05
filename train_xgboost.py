@@ -9,8 +9,9 @@ from config import xgboost_kwargs
 
 def build_parser():
     p = argparse.ArgumentParser()
-    p.add_argument('--dataset', default='southwest', help='southwest or MUST')
+    p.add_argument('--dataset', default='southwest', help='southwest, MUST, or vitaldb')
     p.add_argument('--n-splits', type=int, default=5)
+    p.add_argument('--max-samples', type=int, default=None, help='Use only the first N label files')
     p.add_argument('--top', type=int, default=10, help='Number of top features to print')
     return p
 
@@ -31,7 +32,7 @@ def build_model(seed: int):
 
 def main():
     args = build_parser().parse_args()
-    ds = data_loader.load_dataset(args.dataset)
+    ds = data_loader.load_dataset(args.dataset, max_samples=args.max_samples)
     print(f"Using dataset: {args.dataset}")
     X, y, feature_names = data_loader.split(ds)
     print(f"Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}")
