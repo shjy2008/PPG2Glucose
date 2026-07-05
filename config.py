@@ -14,7 +14,7 @@ DEFAULT_SEEDS = (42, 52, 62, 72, 82)
 
 # PPG sampling rate (Hz) used for frequency-domain and heart-rate features.
 PPG_SAMPLING_RATE = {
-    'kaggle': 2175,
+    'MUST': 2175,
     'southwest': 200,
 }
 DEFAULT_PPG_SAMPLING_RATE = 200

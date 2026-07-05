@@ -8,7 +8,7 @@ import utils
 
 def build_parser():
     p = argparse.ArgumentParser()
-    p.add_argument('--dataset', default='southwest', help='southwest or kaggle')
+    p.add_argument('--dataset', default='southwest', help='southwest or MUST')
     p.add_argument('--n-splits', type=int, default=5)
     p.add_argument('--top', type=int, default=10, help='Number of top features to print')
     return p

@@ -37,7 +37,7 @@ DEFAULT_PARAMS = {
 
 def build_parser():
     p = argparse.ArgumentParser()
-    p.add_argument('--dataset', default='southwest', help='southwest or kaggle')
+    p.add_argument('--dataset', default='southwest', help='southwest or MUST')
     p.add_argument(
         '--params',
         default=None,

@@ -20,8 +20,8 @@ def resolve_dataset_root(dataset: str | Path | None = None) -> Path:
         dataset = 'southwest'
     if isinstance(dataset, Path):
         root = dataset
-    elif dataset == 'kaggle':
-        root = Path('dataset/kaggle')
+    elif dataset == 'MUST':
+        root = Path('dataset/MUST')
     elif dataset == 'southwest':
         root = Path('dataset/southwest')
     else:
@@ -33,12 +33,12 @@ def resolve_dataset_root(dataset: str | Path | None = None) -> Path:
 
 def dataset_layout(root: Path) -> str:
     if (root / 'Labels').is_dir() and (root / 'RawData').is_dir():
-        return 'kaggle'
+        return 'MUST'
     if (root / 'bg_re.xlsx').is_file() and (root / 'ppg').is_dir():
         return 'southwest'
     raise RuntimeError(
         f'Unrecognized dataset layout under {root}. '
-        'Expected kaggle (Labels/ + RawData/) or southwest (bg_re.xlsx + ppg/).'
+        'Expected MUST (Labels/ + RawData/) or southwest (bg_re.xlsx + ppg/).'
     )
 
 
@@ -62,16 +62,16 @@ def load_dataset(
     if labels_dir is not None or raw_data_dir is not None:
         if labels_dir is None or raw_data_dir is None:
             raise ValueError('labels_dir and raw_data_dir must both be provided')
-        return _load_kaggle_dataset(labels_dir, raw_data_dir)
+        return _load_must_dataset(labels_dir, raw_data_dir)
 
     root = resolve_dataset_root(dataset)
     layout = dataset_layout(root)
-    if layout == 'kaggle':
-        return _load_kaggle_dataset(root / 'Labels', root / 'RawData')
+    if layout == 'MUST':
+        return _load_must_dataset(root / 'Labels', root / 'RawData')
     return _load_southwest_dataset(root)
 
 
-def _load_kaggle_dataset(labels_dir: Path, raw_data_dir: Path) -> pd.DataFrame:
+def _load_must_dataset(labels_dir: Path, raw_data_dir: Path) -> pd.DataFrame:
     label_files = sorted(labels_dir.glob('label_*.csv'))
     if not label_files:
         raise RuntimeError(f'No label files found in {labels_dir}')
@@ -106,7 +106,7 @@ def _load_kaggle_dataset(labels_dir: Path, raw_data_dir: Path) -> pd.DataFrame:
         if not signal_path.exists():
             print('Skipping', label_path.name, 'because signal file does not exist:', signal_path.name)
             continue
-        raw_ppg_dict = extract_raw_ppg(signal_path, fs=ppg_sampling_rate('kaggle'))
+        raw_ppg_dict = extract_raw_ppg(signal_path, fs=ppg_sampling_rate('MUST'))
 
         record = {
             'subject_ID': subject_id_int,
@@ -195,7 +195,7 @@ def load_waveform_dataset(
     if labels_dir is not None or raw_data_dir is not None:
         if labels_dir is None or raw_data_dir is None:
             raise ValueError('labels_dir and raw_data_dir must both be provided')
-        signals, demographics, targets = _load_kaggle_waveform_dataset(
+        signals, demographics, targets = _load_must_waveform_dataset(
             labels_dir,
             raw_data_dir,
             signal_length=signal_length,
@@ -205,8 +205,8 @@ def load_waveform_dataset(
     else:
         root = resolve_dataset_root(dataset)
         layout = dataset_layout(root)
-        if layout == 'kaggle':
-            signals, demographics, targets = _load_kaggle_waveform_dataset(
+        if layout == 'MUST':
+            signals, demographics, targets = _load_must_waveform_dataset(
                 root / 'Labels',
                 root / 'RawData',
                 signal_length=signal_length,
@@ -229,7 +229,7 @@ def load_waveform_dataset(
     return signals, demographics, targets
 
 
-def _load_kaggle_waveform_dataset(
+def _load_must_waveform_dataset(
     labels_dir: Path,
     raw_data_dir: Path,
     signal_length: int = 0,
@@ -426,7 +426,7 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', default='kaggle', help='kaggle or southwest')
+    parser.add_argument('--dataset', default='MUST', help='MUST or southwest')
     cli_args = parser.parse_args()
 
     ds = load_dataset(cli_args.dataset)

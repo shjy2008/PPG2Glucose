@@ -29,7 +29,7 @@ def build_parser():
             'All models share the same folds within each seed.'
         ),
     )
-    p.add_argument('--dataset', default='southwest', help='southwest, kaggle, or dataset path')
+    p.add_argument('--dataset', default='southwest', help='southwest, MUST, or dataset path')
     p.add_argument('--n-splits', type=int, default=5, help='Number of CV folds')
     p.add_argument(
         '--models',
