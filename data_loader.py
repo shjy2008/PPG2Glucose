@@ -9,7 +9,7 @@ from utils import (
     mg_dl_to_mmol_l,
     safe_float,
 )
-from config import BASIC_FEATURE_KEYS
+from config import BASIC_FEATURE_KEYS, ppg_sampling_rate
 from data_basic_info import extract_basic_info
 from data_ppg import extract_raw_ppg, read_signal_waveform, extract_ppg_bpm
 # from data_ppg_basic import extract_raw_ppg, read_signal_waveform, extract_ppg_bpm  # performance worse than data_ppg
@@ -106,7 +106,7 @@ def _load_kaggle_dataset(labels_dir: Path, raw_data_dir: Path) -> pd.DataFrame:
         if not signal_path.exists():
             print('Skipping', label_path.name, 'because signal file does not exist:', signal_path.name)
             continue
-        raw_ppg_dict = extract_raw_ppg(signal_path)
+        raw_ppg_dict = extract_raw_ppg(signal_path, fs=ppg_sampling_rate('kaggle'))
 
         record = {
             'subject_ID': subject_id_int,
@@ -153,7 +153,7 @@ def _load_southwest_dataset(root: Path) -> pd.DataFrame:
             'target': target,
         }
         record.update(basic_info_dict)
-        record.update(extract_raw_ppg(signal_path))
+        record.update(extract_raw_ppg(signal_path, fs=ppg_sampling_rate('southwest')))
         # PPG_BPM is not useful, including it cause worse performance (tested through 210 subjects with ppg_bpm)
         # ppg_bpm = extract_ppg_bpm(row)
         # if not ppg_bpm:

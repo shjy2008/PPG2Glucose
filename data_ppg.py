@@ -5,6 +5,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from config import DEFAULT_PPG_SAMPLING_RATE
 from utils import safe_float
 
 # Default fractions trimmed from PPG signals before feature extraction.
@@ -195,7 +196,7 @@ def _pulse_features(signal: np.ndarray, prefix: str) -> dict:
     }
 
 
-def _frequency_domain_features(signal: np.ndarray, prefix: str) -> dict:
+def _frequency_domain_features(signal: np.ndarray, prefix: str, fs: float) -> dict:
     if signal.size < 16:
         return {
             f'{prefix}ppg_dominant_frequency': 0.0,
@@ -208,8 +209,7 @@ def _frequency_domain_features(signal: np.ndarray, prefix: str) -> dict:
 
     centered = signal - np.mean(signal)
     spectrum = np.abs(np.fft.rfft(centered)) ** 2
-    fs = 200 # sampling frequency, assume 200 Hz for now
-    freqs = np.fft.rfftfreq(centered.size, d=1.0/fs)
+    freqs = np.fft.rfftfreq(centered.size, d=1.0 / fs)
     total_power = float(np.sum(spectrum))
     if total_power <= 1e-12:
         return {
@@ -248,7 +248,7 @@ def _frequency_domain_features(signal: np.ndarray, prefix: str) -> dict:
     }
 
 
-def _periodic_features(signal: np.ndarray, prefix: str) -> dict:
+def _periodic_features(signal: np.ndarray, prefix: str, fs: float) -> dict:
     if signal.size < 8:
         return {
             f'{prefix}ppg_autocorr_peak_lag': 0.0,
@@ -279,7 +279,6 @@ def _periodic_features(signal: np.ndarray, prefix: str) -> dict:
 
     peak_lag = float(min_lag + int(np.argmax(search)))
     peak_val = float(autocorr[int(peak_lag)])
-    fs = 100.0 # assuming 100 Hz sampling frequency
     heart_rate_bpm = float(60.0 * fs / peak_lag) if peak_lag > 0 else 0.0
     return {
         f'{prefix}ppg_autocorr_peak_lag': peak_lag,
@@ -325,7 +324,7 @@ def _segment_features(signal: np.ndarray, prefix: str) -> dict:
     }
 
 
-def extract_ppg_features(signal: np.ndarray) -> dict:
+def extract_ppg_features(signal: np.ndarray, fs: float = DEFAULT_PPG_SAMPLING_RATE) -> dict:
     """Extract hand-crafted PPG features from a 1-D waveform."""
     signal = np.asarray(signal, dtype=float).reshape(-1)
     if signal.size == 0:
@@ -335,12 +334,15 @@ def extract_ppg_features(signal: np.ndarray) -> dict:
     features.update(_distribution_features(signal, prefix='g1_'))
     features.update(_derivative_features(signal, prefix='g2_'))
     features.update(_pulse_features(signal, prefix='g3_'))
-    features.update(_frequency_domain_features(signal, prefix='g4_'))
-    features.update(_periodic_features(signal, prefix='g5_'))
+    features.update(_frequency_domain_features(signal, prefix='g4_', fs=fs))
+    features.update(_periodic_features(signal, prefix='g5_', fs=fs))
     features.update(_segment_features(signal, prefix='g6_'))
     return features
 
 
-def extract_raw_ppg(signal_path: str | Path) -> dict:
+def extract_raw_ppg(
+    signal_path: str | Path,
+    fs: float = DEFAULT_PPG_SAMPLING_RATE,
+) -> dict:
     signal = read_signal_waveform(Path(signal_path))
-    return extract_ppg_features(signal)
+    return extract_ppg_features(signal, fs=fs)

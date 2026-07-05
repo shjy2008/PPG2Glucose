@@ -12,6 +12,17 @@ BASIC_FEATURE_KEYS = ('age',)
 # Shared default for repeated k-fold CV (5-fold x 5 seeds = 25 evaluations).
 DEFAULT_SEEDS = (42, 52, 62, 72, 82)
 
+# PPG sampling rate (Hz) used for frequency-domain and heart-rate features.
+PPG_SAMPLING_RATE = {
+    'kaggle': 2175,
+    'southwest': 200,
+}
+DEFAULT_PPG_SAMPLING_RATE = 200
+
+
+def ppg_sampling_rate(dataset: str) -> float:
+    return PPG_SAMPLING_RATE.get(dataset, DEFAULT_PPG_SAMPLING_RATE)
+
 # Drop glucose targets outside this quantile range (mmol/L).
 TARGET_OUTLIER_LOWER_Q = 0
 TARGET_OUTLIER_UPPER_Q = 1
