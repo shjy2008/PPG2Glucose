@@ -8,7 +8,7 @@ from catboost import CatBoostRegressor
 import data_loader
 import utils
 import numpy as np
-from config import DEFAULT_SEEDS, catboost_kwargs
+from config import DEFAULT_SEEDS, DEFAULT_WINDOW_SECONDS, catboost_kwargs
 
 DEFAULT_PARAMS = {
     # 'iterations': 400,
@@ -46,9 +46,16 @@ def build_parser():
     p.add_argument('--n-splits', type=int, default=5)
     p.add_argument('--max-samples', type=int, default=None, help='Use only the first N label files')
     p.add_argument(
+        '--window-seconds',
+        type=float,
+        default=None,
+        help='Non-overlapping PPG window length in seconds (default: config.DEFAULT_WINDOW_SECONDS; 0=full)',
+    )
+    p.add_argument(
         '--subject-wise',
         action='store_true',
-        help='Use GroupKFold so the same subject_ID never appears in both train and val',
+        help='Use GroupKFold so the same subject_ID never appears in both train and val '
+             '(auto-enabled when any subject has multiple samples, e.g. MUST or windowed PPG)',
     )
     p.add_argument(
         '--select-top',
@@ -83,9 +90,22 @@ def build_model(seed: int, params: Optional[dict] = None):
 
 def main():
     args = build_parser().parse_args()
-    ds = data_loader.load_dataset(args.dataset, max_samples=args.max_samples)
-    print(f"Using dataset: {args.dataset}")
-    if args.subject_wise:
+    window_seconds = (
+        DEFAULT_WINDOW_SECONDS if args.window_seconds is None else args.window_seconds
+    )
+    ds = data_loader.load_dataset(
+        args.dataset,
+        max_samples=args.max_samples,
+        window_seconds=window_seconds,
+    )
+    # Leakage if the same subject appears in train and val with multiple rows
+    # (MUST/vitaldb sessions, or windowed PPG).
+    multi_sample_subjects = (
+        'subject_ID' in ds.columns and ds.groupby('subject_ID').size().max() > 1
+    )
+    subject_wise = args.subject_wise or multi_sample_subjects
+    print(f"Using dataset: {args.dataset} (window_seconds={window_seconds})")
+    if subject_wise:
         X, y, feature_names, groups = data_loader.split(ds, return_groups=True)
         if groups is None:
             raise RuntimeError('subject-wise CV requires subject_ID in the dataset')

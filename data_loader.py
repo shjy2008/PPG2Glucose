@@ -8,11 +8,23 @@ from utils import (
     mg_dl_to_mmol_l,
     safe_float,
 )
-from config import BASIC_FEATURE_KEYS, ppg_sampling_rate
+from config import BASIC_FEATURE_KEYS, DEFAULT_WINDOW_SECONDS, ppg_sampling_rate
 from data_basic_info import extract_basic_info
-from data_ppg import extract_raw_ppg, read_signal_waveform, extract_ppg_bpm
+from data_ppg import (
+    extract_raw_ppg,
+    extract_raw_ppg_windows,
+    read_signal_waveform,
+    extract_ppg_bpm,
+)
 # from data_ppg_basic import extract_raw_ppg, read_signal_waveform, extract_ppg_bpm  # performance worse than data_ppg
 from sklearn.model_selection import KFold
+
+
+def _ppg_feature_dicts(signal_path: Path, fs: float, window_seconds: float) -> list[dict]:
+    """Full-signal features when window_seconds<=0; else one dict per window."""
+    if window_seconds is None or window_seconds <= 0:
+        return [extract_raw_ppg(signal_path, fs=fs)]
+    return extract_raw_ppg_windows(signal_path, fs=fs, window_seconds=window_seconds)
 
 def resolve_dataset_root(dataset: str | Path | None = None) -> Path:
     if dataset is None:
@@ -62,22 +74,31 @@ def load_dataset(
     labels_dir: Path | None = None,
     raw_data_dir: Path | None = None,
     max_samples: int | None = None,
+    window_seconds: float = DEFAULT_WINDOW_SECONDS,
 ) -> pd.DataFrame:
     if labels_dir is not None or raw_data_dir is not None:
         if labels_dir is None or raw_data_dir is None:
             raise ValueError('labels_dir and raw_data_dir must both be provided')
         layout = 'MUST'
         return _load_labels_rawdata_dataset(
-            labels_dir, raw_data_dir, layout, max_samples=max_samples,
+            labels_dir,
+            raw_data_dir,
+            layout,
+            max_samples=max_samples,
+            window_seconds=window_seconds,
         )
 
     root = resolve_dataset_root(dataset)
     layout = dataset_layout(root)
     if layout in {'MUST', 'vitaldb'}:
         return _load_labels_rawdata_dataset(
-            root / 'Labels', root / 'RawData', layout, max_samples=max_samples,
+            root / 'Labels',
+            root / 'RawData',
+            layout,
+            max_samples=max_samples,
+            window_seconds=window_seconds,
         )
-    return _load_southwest_dataset(root)
+    return _load_southwest_dataset(root, window_seconds=window_seconds)
 
 
 def _load_labels_rawdata_dataset(
@@ -85,6 +106,7 @@ def _load_labels_rawdata_dataset(
     raw_data_dir: Path,
     dataset_name: str,
     max_samples: int | None = None,
+    window_seconds: float = DEFAULT_WINDOW_SECONDS,
 ) -> pd.DataFrame:
     label_files = sorted(labels_dir.glob('label_*.csv'))
     if not label_files:
@@ -127,17 +149,24 @@ def _load_labels_rawdata_dataset(
         if not signal_path.exists():
             print('Skipping', label_path.name, 'because signal file does not exist:', signal_path.name)
             continue
-        raw_ppg_dict = extract_raw_ppg(signal_path, fs=ppg_sampling_rate(dataset_name))
+        feature_dicts = _ppg_feature_dicts(
+            signal_path, fs=ppg_sampling_rate(dataset_name), window_seconds=window_seconds,
+        )
+        if not feature_dicts:
+            print('Skipping', label_path.name, 'because signal is empty')
+            continue
 
-        record = {
-            'subject_ID': subject_id_int,
-            'session_ID': session_key,
-            'target': target,
-        }
-        record.update(basic_info_dict)
-        record.update(raw_ppg_dict)
-
-        records.append(record)
+        for window_id, raw_ppg_dict in enumerate(feature_dicts):
+            record = {
+                'subject_ID': subject_id_int,
+                'session_ID': session_key,
+                'target': target,
+            }
+            if window_seconds is not None and window_seconds > 0:
+                record['window_ID'] = window_id
+            record.update(basic_info_dict)
+            record.update(raw_ppg_dict)
+            records.append(record)
 
         if i == 1 or i == n_files or i % progress_every == 0:
             print(f'  loaded {i}/{n_files} files ({len(records)} usable)', flush=True)
@@ -152,7 +181,10 @@ def _load_labels_rawdata_dataset(
     return dataset
 
 
-def _load_southwest_dataset(root: Path) -> pd.DataFrame:
+def _load_southwest_dataset(
+    root: Path,
+    window_seconds: float = DEFAULT_WINDOW_SECONDS,
+) -> pd.DataFrame:
     ppg_dir = root / 'ppg'
     metadata = pd.read_excel(root / 'bg_re.xlsx', sheet_name=0, header=1)
     records = []
@@ -173,19 +205,28 @@ def _load_southwest_dataset(root: Path) -> pd.DataFrame:
             print('Skipping subject', subject_id_int, 'because signal file does not exist:', signal_path.name)
             continue
 
-        record = {
-            'subject_ID': subject_id_int,
-            'target': target,
-        }
-        record.update(basic_info_dict)
-        record.update(extract_raw_ppg(signal_path, fs=ppg_sampling_rate('southwest')))
-        
-        # PPG_BPM is not useful, including it cause worse performance (tested through 210 subjects with ppg_bpm)
-        # ppg_bpm = extract_ppg_bpm(row)
-        # if not ppg_bpm:
-        #     continue
-        # record.update(ppg_bpm)
-        records.append(record)
+        feature_dicts = _ppg_feature_dicts(
+            signal_path, fs=ppg_sampling_rate('southwest'), window_seconds=window_seconds,
+        )
+        if not feature_dicts:
+            print('Skipping subject', subject_id_int, 'because signal is empty')
+            continue
+
+        for window_id, raw_ppg_dict in enumerate(feature_dicts):
+            record = {
+                'subject_ID': subject_id_int,
+                'target': target,
+            }
+            if window_seconds is not None and window_seconds > 0:
+                record['window_ID'] = window_id
+            record.update(basic_info_dict)
+            record.update(raw_ppg_dict)
+            # PPG_BPM is not useful, including it cause worse performance (tested through 210 subjects with ppg_bpm)
+            # ppg_bpm = extract_ppg_bpm(row)
+            # if not ppg_bpm:
+            #     continue
+            # record.update(ppg_bpm)
+            records.append(record)
 
     if not records:
         raise RuntimeError(
@@ -409,7 +450,7 @@ def split(dataset: pd.DataFrame, return_groups: bool = False):
     feature_columns = [
         column
         for column in dataset.columns
-        if column not in {'subject_ID', 'session_ID', 'target'}
+        if column not in {'subject_ID', 'session_ID', 'window_ID', 'target'}
     ]
     X = dataset[feature_columns]
     y = dataset['target']

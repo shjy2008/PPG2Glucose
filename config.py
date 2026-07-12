@@ -21,6 +21,9 @@ PPG_SAMPLING_RATE = {
 }
 DEFAULT_PPG_SAMPLING_RATE = 200
 
+# 0 = full signal (one sample). >0 = non-overlapping windows in seconds.
+DEFAULT_WINDOW_SECONDS = 0.0
+
 
 def ppg_sampling_rate(dataset: str) -> float:
     return PPG_SAMPLING_RATE.get(dataset, DEFAULT_PPG_SAMPLING_RATE)
