@@ -3,11 +3,12 @@
 USE_GPU = False
 
 # Edit this list for tabular ML, CNN, LSTM, etc.
-BASIC_FEATURE_KEYS = ('age',)
+# BASIC_FEATURE_KEYS = []
+# BASIC_FEATURE_KEYS = ('age',)
 # BASIC_FEATURE_KEYS = ('age', 'bmi')
 # BASIC_FEATURE_KEYS = ('age', 'height', 'weight')
 # BASIC_FEATURE_KEYS = ('sex', 'age', 'height', 'weight')
-# BASIC_FEATURE_KEYS = ('age', 'height', 'weight', 'bmi')
+BASIC_FEATURE_KEYS = ('age', 'height', 'weight', 'bmi')
 
 # Shared default for repeated k-fold CV (5-fold x 5 seeds = 25 evaluations).
 DEFAULT_SEEDS = (42, 52, 62, 72, 82)
@@ -16,7 +17,7 @@ DEFAULT_SEEDS = (42, 52, 62, 72, 82)
 PPG_SAMPLING_RATE = {
     'MUST': 2175,
     'southwest': 200,
-    'vitaldb': 100,
+    'vitaldb': 500,
 }
 DEFAULT_PPG_SAMPLING_RATE = 200
 
