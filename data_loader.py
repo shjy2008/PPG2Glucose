@@ -5,7 +5,6 @@ import pandas as pd
 from pathlib import Path
 from utils import (
     exclude_target_outlier_arrays,
-    exclude_target_outliers,
     mg_dl_to_mmol_l,
     safe_float,
 )
@@ -406,7 +405,7 @@ def _load_southwest_waveform_dataset(
     )
 
 
-def split(dataset: pd.DataFrame):
+def split(dataset: pd.DataFrame, return_groups: bool = False):
     feature_columns = [
         column
         for column in dataset.columns
@@ -414,8 +413,20 @@ def split(dataset: pd.DataFrame):
     ]
     X = dataset[feature_columns]
     y = dataset['target']
-    X, y = exclude_target_outliers(X, y)
+    groups = dataset['subject_ID'] if 'subject_ID' in dataset.columns else None
+
+    from utils import _log_outlier_exclusion, _target_outlier_mask
+
+    mask, lower, upper = _target_outlier_mask(y)
+    _log_outlier_exclusion(int((~mask).sum()), lower, upper)
+    X = X.loc[mask].reset_index(drop=True)
+    y = y.loc[mask].reset_index(drop=True)
     feature_columns = list(X.columns)
+    if return_groups:
+        if groups is None:
+            return X, y, feature_columns, None
+        groups = groups.loc[mask].reset_index(drop=True).to_numpy()
+        return X, y, feature_columns, groups
     return X, y, feature_columns
 
 

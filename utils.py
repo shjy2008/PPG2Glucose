@@ -4,7 +4,7 @@ import pandas as pd
 from typing import Callable, Dict, Mapping, Optional, Sequence, Tuple
 
 from sklearn.impute import SimpleImputer
-from sklearn.model_selection import KFold
+from sklearn.model_selection import GroupKFold, KFold
 
 import evaluation
 from config import DEFAULT_SEEDS, TARGET_OUTLIER_LOWER_Q, TARGET_OUTLIER_UPPER_Q
@@ -111,6 +111,38 @@ def _warn_nan_features(X: pd.DataFrame, verbose: bool) -> None:
         )
 
 
+def _iter_cv_splits(
+    y: np.ndarray,
+    n_splits: int,
+    seed: int,
+    groups: Optional[np.ndarray] = None,
+):
+    """Yield (train_index, val_index). With groups, keep subjects out of both folds."""
+    if groups is None:
+        cv = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
+        yield from cv.split(y)
+        return
+
+    groups = np.asarray(groups)
+    if len(groups) != len(y):
+        raise ValueError(f'groups length ({len(groups)}) must match y ({len(y)})')
+    n_groups = len(np.unique(groups))
+    if n_groups < n_splits:
+        raise ValueError(
+            f'Need at least {n_splits} unique subjects for GroupKFold, found {n_groups}'
+        )
+
+    # GroupKFold has no shuffle; remap group ids with a seeded permutation.
+    unique_groups = np.unique(groups)
+    rng = np.random.RandomState(seed)
+    shuffled = unique_groups.copy()
+    rng.shuffle(shuffled)
+    remap = {group: index for index, group in enumerate(shuffled)}
+    remapped = np.asarray([remap[group] for group in groups], dtype=int)
+    cv = GroupKFold(n_splits=n_splits)
+    yield from cv.split(y, groups=remapped)
+
+
 def _run_repeated_kfold_cv(
     y: np.ndarray,
     run_fold: Callable[[np.ndarray, np.ndarray, int], Mapping[str, np.ndarray]],
@@ -118,6 +150,7 @@ def _run_repeated_kfold_cv(
     *,
     n_splits: int = 5,
     seeds: Optional[Sequence[int]] = None,
+    groups: Optional[np.ndarray] = None,
     verbose: bool = True,
     fold_log: Optional[Callable[[Dict[str, dict]], str]] = None,
 ) -> Tuple[Dict[str, list[dict]], Dict[str, np.ndarray]]:
@@ -130,11 +163,14 @@ def _run_repeated_kfold_cv(
     oof_count = {name: np.zeros(len(y), dtype=float) for name in model_names}
 
     for seed_index, seed in enumerate(seeds, start=1):
-        cv = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
         if verbose:
-            print(f'--- Seed {seed} ({seed_index}/{len(seeds)}) ---')
+            mode = 'GroupKFold (subject-wise)' if groups is not None else 'KFold'
+            print(f'--- Seed {seed} ({seed_index}/{len(seeds)}) [{mode}] ---')
 
-        for fold_index, (train_index, val_index) in enumerate(cv.split(y), start=1):
+        for fold_index, (train_index, val_index) in enumerate(
+            _iter_cv_splits(y, n_splits, seed, groups=groups),
+            start=1,
+        ):
             predictions_by_model = run_fold(train_index, val_index, seed)
             metrics_by_model = {}
             for name in model_names:
@@ -271,9 +307,23 @@ def run_repeated_kfold_training(
     model_name: str = 'model',
     n_splits: int = 5,
     select_top_n: Optional[int] = None,
+    groups: Optional[np.ndarray] = None,
     verbose: bool = True,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    X, y = _prepare_xy(X, y)
+    if groups is not None:
+        groups = np.asarray(groups)
+        if len(groups) != len(y):
+            raise ValueError(f'groups length ({len(groups)}) must match y ({len(y)})')
+        X = X.replace([np.inf, -np.inf], np.nan)
+        mask = y.notna().to_numpy()
+        if not mask.all():
+            dropped = int((~mask).sum())
+            print(f"Warning: dropping {dropped} rows with missing target before CV")
+        X = X.loc[mask].reset_index(drop=True)
+        y = y.loc[mask].reset_index(drop=True)
+        groups = groups[mask]
+    else:
+        X, y = _prepare_xy(X, y)
     seeds = DEFAULT_SEEDS
     y_values = y.values
     track_importances = feature_names is not None and len(feature_names) > 0
@@ -291,6 +341,11 @@ def run_repeated_kfold_training(
     _warn_nan_features(X, verbose)
     if verbose:
         extras = []
+        if groups is not None:
+            extras.append(
+                f'Split: GroupKFold by subject_ID '
+                f'({len(np.unique(groups))} unique subjects)'
+            )
         if use_selection:
             extras.append(f'Feature selection: top {select_top_n} per fold (train-only ranking)')
         evaluation.print_cv_intro(y_values, n_splits, seeds, extra_lines=extras)
@@ -334,6 +389,7 @@ def run_repeated_kfold_training(
         [model_name],
         n_splits=n_splits,
         seeds=seeds,
+        groups=groups,
         verbose=verbose,
     )
     _, summary_df, oof_predictions = evaluation.report_cv(

@@ -46,6 +46,11 @@ def build_parser():
     p.add_argument('--n-splits', type=int, default=5)
     p.add_argument('--max-samples', type=int, default=None, help='Use only the first N label files')
     p.add_argument(
+        '--subject-wise',
+        action='store_true',
+        help='Use GroupKFold so the same subject_ID never appears in both train and val',
+    )
+    p.add_argument(
         '--select-top',
         type=int,
         default=None,
@@ -80,7 +85,17 @@ def main():
     args = build_parser().parse_args()
     ds = data_loader.load_dataset(args.dataset, max_samples=args.max_samples)
     print(f"Using dataset: {args.dataset}")
-    X, y, feature_names = data_loader.split(ds)
+    if args.subject_wise:
+        X, y, feature_names, groups = data_loader.split(ds, return_groups=True)
+        if groups is None:
+            raise RuntimeError('subject-wise CV requires subject_ID in the dataset')
+        print(
+            f"Subject-wise CV: {len(np.unique(groups))} unique subjects "
+            f"across {len(y)} samples"
+        )
+    else:
+        X, y, feature_names = data_loader.split(ds)
+        groups = None
     print(
         f"Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}, "
         f"features: {X.shape[1]}"
@@ -111,6 +126,7 @@ def main():
         model_name='catboost',
         n_splits=args.n_splits,
         select_top_n=args.select_top,
+        groups=groups,
     )
     n_evaluations = int(summary_df['n_evaluations'].iloc[0])
     if args.select_top is not None:
