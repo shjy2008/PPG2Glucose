@@ -94,8 +94,12 @@ def _load_labels_rawdata_dataset(
         label_files = label_files[:max_samples]
         print(f'Limited to {len(label_files)} sample(s)')
 
+    n_files = len(label_files)
+    progress_every = max(1, n_files // 20)  # ~5% steps
+    print(f'Loading {n_files} sample(s) from {labels_dir} (PPG feature extraction)...')
+
     records = []
-    for label_path in label_files:
+    for i, label_path in enumerate(label_files, start=1):
         try:
             subject_key, session_key = _parse_label_stem(label_path)
         except ValueError as exc:
@@ -136,12 +140,16 @@ def _load_labels_rawdata_dataset(
 
         records.append(record)
 
+        if i == 1 or i == n_files or i % progress_every == 0:
+            print(f'  loaded {i}/{n_files} files ({len(records)} usable)', flush=True)
+
     dataset = pd.DataFrame(records)
     if dataset.empty:
         raise RuntimeError(
             'No usable rows were found. Check Labels/*.csv and matching RawData/signal_*.csv files.'
         )
 
+    print(f'Finished loading: {len(dataset)} usable sample(s)', flush=True)
     return dataset
 
 
@@ -172,6 +180,7 @@ def _load_southwest_dataset(root: Path) -> pd.DataFrame:
         }
         record.update(basic_info_dict)
         record.update(extract_raw_ppg(signal_path, fs=ppg_sampling_rate('southwest')))
+        
         # PPG_BPM is not useful, including it cause worse performance (tested through 210 subjects with ppg_bpm)
         # ppg_bpm = extract_ppg_bpm(row)
         # if not ppg_bpm:
