@@ -10,7 +10,7 @@ from utils import safe_float
 
 # Default fractions trimmed from PPG signals before feature extraction.
 # Set both to 0.0 to disable trimming. start + end must be < 1.0.
-PPG_START_TRIM_FRACTION = 0.1
+PPG_START_TRIM_FRACTION = 0.0
 PPG_END_TRIM_FRACTION = 0.0
 
 
@@ -346,3 +346,32 @@ def extract_raw_ppg(
 ) -> dict:
     signal = read_signal_waveform(Path(signal_path))
     return extract_ppg_features(signal, fs=fs)
+
+
+def segment_signal(signal: np.ndarray, fs: float, window_seconds: float) -> list[np.ndarray]:
+    """Non-overlapping windows; trailing remainder shorter than one window is dropped."""
+    values = np.asarray(signal, dtype=float).reshape(-1)
+    if values.size == 0:
+        return []
+    window_samples = int(round(float(window_seconds) * float(fs)))
+    if window_samples < 1:
+        raise ValueError(f'window_seconds={window_seconds} yields <1 sample at fs={fs}')
+    if values.size < window_samples:
+        return [values]
+    n_windows = values.size // window_samples
+    return [
+        values[i * window_samples : (i + 1) * window_samples]
+        for i in range(n_windows)
+    ]
+
+
+def extract_raw_ppg_windows(
+    signal_path: str | Path,
+    fs: float,
+    window_seconds: float,
+) -> list[dict]:
+    signal = read_signal_waveform(Path(signal_path))
+    return [
+        extract_ppg_features(window, fs=fs)
+        for window in segment_signal(signal, fs=fs, window_seconds=window_seconds)
+    ]
