@@ -34,6 +34,13 @@ DEFAULT_PARAMS = {
     'border_count': 190,
 }
 
+# Dataset-specific overrides; edit these independently after tuning each dataset.
+DATASET_PARAMS = {
+    'southwest': {},
+    'MUST': {'iterations': 100},
+    'vitaldb': {},
+}
+
 
 def build_parser():
     p = argparse.ArgumentParser()
@@ -68,9 +75,9 @@ def build_parser():
     return p
 
 
-def load_params(path: Optional[str] = None) -> dict:
+def load_params(dataset: str, path: Optional[str] = None) -> dict:
     if path is None:
-        return dict(DEFAULT_PARAMS)
+        return {**DEFAULT_PARAMS, **DATASET_PARAMS.get(dataset, {})}
     payload = json.loads(Path(path).read_text())
     if 'params' in payload:
         return dict(payload['params'])
@@ -122,7 +129,7 @@ def main():
         + (f' (using top {args.select_top} per fold)' if args.select_top else '')
     )
 
-    params = load_params(args.params)
+    params = load_params(args.dataset, args.params)
     if args.params:
         print(f'Using hyperparameters from {args.params}')
 

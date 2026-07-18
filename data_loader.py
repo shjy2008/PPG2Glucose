@@ -8,7 +8,12 @@ from utils import (
     mg_dl_to_mmol_l,
     safe_float,
 )
-from config import BASIC_FEATURE_KEYS, DEFAULT_WINDOW_SECONDS, ppg_sampling_rate
+from config import (
+    BASIC_FEATURE_KEYS,
+    DEFAULT_WINDOW_SECONDS,
+    ppg_sampling_rate,
+    ppg_trim_fractions,
+)
 from data_basic_info import extract_basic_info
 from data_ppg import (
     extract_raw_ppg,
@@ -20,11 +25,22 @@ from data_ppg import (
 from sklearn.model_selection import KFold
 
 
-def _ppg_feature_dicts(signal_path: Path, fs: float, window_seconds: float) -> list[dict]:
+def _ppg_feature_dicts(
+    signal_path: Path,
+    fs: float,
+    window_seconds: float,
+    dataset_name: str,
+) -> list[dict]:
     """Full-signal features when window_seconds<=0; else one dict per window."""
+    trim_fractions = ppg_trim_fractions(dataset_name)
     if window_seconds is None or window_seconds <= 0:
-        return [extract_raw_ppg(signal_path, fs=fs)]
-    return extract_raw_ppg_windows(signal_path, fs=fs, window_seconds=window_seconds)
+        return [extract_raw_ppg(signal_path, fs=fs, trim_fractions=trim_fractions)]
+    return extract_raw_ppg_windows(
+        signal_path,
+        fs=fs,
+        window_seconds=window_seconds,
+        trim_fractions=trim_fractions,
+    )
 
 def resolve_dataset_root(dataset: str | Path | None = None) -> Path:
     if dataset is None:
@@ -150,7 +166,10 @@ def _load_labels_rawdata_dataset(
             print('Skipping', label_path.name, 'because signal file does not exist:', signal_path.name)
             continue
         feature_dicts = _ppg_feature_dicts(
-            signal_path, fs=ppg_sampling_rate(dataset_name), window_seconds=window_seconds,
+            signal_path,
+            fs=ppg_sampling_rate(dataset_name),
+            window_seconds=window_seconds,
+            dataset_name=dataset_name,
         )
         if not feature_dicts:
             print('Skipping', label_path.name, 'because signal is empty')
@@ -206,7 +225,10 @@ def _load_southwest_dataset(
             continue
 
         feature_dicts = _ppg_feature_dicts(
-            signal_path, fs=ppg_sampling_rate('southwest'), window_seconds=window_seconds,
+            signal_path,
+            fs=ppg_sampling_rate('southwest'),
+            window_seconds=window_seconds,
+            dataset_name='southwest',
         )
         if not feature_dicts:
             print('Skipping subject', subject_id_int, 'because signal is empty')
@@ -354,7 +376,9 @@ def _load_labels_rawdata_waveform_dataset(
             print('Skipping', label_path.name, 'because signal file does not exist:', signal_path.name)
             continue
 
-        waveform = read_signal_waveform(signal_path).astype(np.float32, copy=False)
+        waveform = read_signal_waveform(
+            signal_path, ppg_trim_fractions(dataset_name)
+        ).astype(np.float32, copy=False)
         if waveform.size == 0:
             print('Skipping', label_path.name, 'because signal is empty')
             continue
@@ -417,7 +441,9 @@ def _load_southwest_waveform_dataset(
         else:
             basic_values = np.empty(0, dtype=np.float32)
 
-        waveform = read_signal_waveform(signal_path).astype(np.float32, copy=False)
+        waveform = read_signal_waveform(
+            signal_path, ppg_trim_fractions('southwest')
+        ).astype(np.float32, copy=False)
         if waveform.size == 0:
             print('Skipping subject', subject_id_int, 'because signal is empty')
             continue

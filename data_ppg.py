@@ -5,19 +5,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from config import DEFAULT_PPG_SAMPLING_RATE
+from config import DEFAULT_PPG_SAMPLING_RATE, DEFAULT_PPG_TRIM_FRACTIONS
 from utils import safe_float
-
-# Default fractions trimmed from PPG signals before feature extraction.
-# Set both to 0.0 to disable trimming. start + end must be < 1.0.
-PPG_START_TRIM_FRACTION = 0.0
-PPG_END_TRIM_FRACTION = 0.0
 
 
 def trim_signal(
     signal: np.ndarray,
-    start_trim_fraction: float = PPG_START_TRIM_FRACTION,
-    end_trim_fraction: float = PPG_END_TRIM_FRACTION,
+    start_trim_fraction: float = DEFAULT_PPG_TRIM_FRACTIONS[0],
+    end_trim_fraction: float = DEFAULT_PPG_TRIM_FRACTIONS[1],
 ) -> np.ndarray:
     """Return the signal after trimming configurable portions from start and/or end."""
     values = np.asarray(signal, dtype=float).reshape(-1)
@@ -50,10 +45,13 @@ def extract_ppg_bpm(row: pd.Series) -> dict:
     }
 
 
-def read_signal_waveform(signal_path: Path) -> np.ndarray:
+def read_signal_waveform(
+    signal_path: Path,
+    trim_fractions: tuple[float, float] = DEFAULT_PPG_TRIM_FRACTIONS,
+) -> np.ndarray:
     """Return PPG samples from a signal file."""
     signal = _read_signal_values(signal_path)
-    return trim_signal(signal)
+    return trim_signal(signal, *trim_fractions)
 
 
 def _read_signal_values(signal_path: Path) -> np.ndarray:
@@ -343,8 +341,9 @@ def extract_ppg_features(signal: np.ndarray, fs: float = DEFAULT_PPG_SAMPLING_RA
 def extract_raw_ppg(
     signal_path: str | Path,
     fs: float = DEFAULT_PPG_SAMPLING_RATE,
+    trim_fractions: tuple[float, float] = DEFAULT_PPG_TRIM_FRACTIONS,
 ) -> dict:
-    signal = read_signal_waveform(Path(signal_path))
+    signal = read_signal_waveform(Path(signal_path), trim_fractions)
     return extract_ppg_features(signal, fs=fs)
 
 
@@ -369,8 +368,9 @@ def extract_raw_ppg_windows(
     signal_path: str | Path,
     fs: float,
     window_seconds: float,
+    trim_fractions: tuple[float, float] = DEFAULT_PPG_TRIM_FRACTIONS,
 ) -> list[dict]:
-    signal = read_signal_waveform(Path(signal_path))
+    signal = read_signal_waveform(Path(signal_path), trim_fractions)
     return [
         extract_ppg_features(window, fs=fs)
         for window in segment_signal(signal, fs=fs, window_seconds=window_seconds)

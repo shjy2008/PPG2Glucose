@@ -24,9 +24,20 @@ DEFAULT_PPG_SAMPLING_RATE = 200
 # 0 = full signal (one sample). >0 = non-overlapping windows in seconds.
 DEFAULT_WINDOW_SECONDS = 0.0
 
+# Fractions trimmed from each dataset's PPG signals before feature extraction.
+PPG_TRIM_FRACTIONS = {
+    'MUST': (0.0, 0.0),
+    'southwest': (0.1, 0.0),
+}
+DEFAULT_PPG_TRIM_FRACTIONS = (0.0, 0.0)
+
 
 def ppg_sampling_rate(dataset: str) -> float:
     return PPG_SAMPLING_RATE.get(dataset, DEFAULT_PPG_SAMPLING_RATE)
+
+
+def ppg_trim_fractions(dataset: str) -> tuple[float, float]:
+    return PPG_TRIM_FRACTIONS.get(dataset, DEFAULT_PPG_TRIM_FRACTIONS)
 
 # Drop glucose targets outside this quantile range (mmol/L).
 TARGET_OUTLIER_LOWER_Q = 0
