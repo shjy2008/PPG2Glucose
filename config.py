@@ -2,13 +2,15 @@
 
 USE_GPU = False
 
-# Edit this list for tabular ML, CNN, LSTM, etc.
-# BASIC_FEATURE_KEYS = []
-# BASIC_FEATURE_KEYS = ('age',)
-# BASIC_FEATURE_KEYS = ('age', 'bmi')
-# BASIC_FEATURE_KEYS = ('age', 'height', 'weight')
-# BASIC_FEATURE_KEYS = ('sex', 'age', 'height', 'weight')
-BASIC_FEATURE_KEYS = ('age', 'height', 'weight', 'bmi')
+# Per-dataset demographic features for tabular ML, CNN, LSTM, etc.
+# Options: (), ('age',), ('age', 'bmi'), ('age', 'height', 'weight'),
+# ('sex', 'age', 'height', 'weight'), ('age', 'height', 'weight', 'bmi')
+BASIC_FEATURE_KEYS = {
+    'southwest': ('age', 'height', 'weight', 'bmi'),
+    'MUST': (),
+    'vitaldb': (),
+}
+DEFAULT_BASIC_FEATURE_KEYS = ()
 
 # Shared default for repeated k-fold CV (5-fold x 5 seeds = 25 evaluations).
 DEFAULT_SEEDS = (42, 52, 62, 72, 82)
@@ -28,8 +30,13 @@ DEFAULT_WINDOW_SECONDS = 0.0
 PPG_TRIM_FRACTIONS = {
     'MUST': (0.0, 0.0),
     'southwest': (0.1, 0.0),
+    'vitaldb': (0.0, 0.0),
 }
 DEFAULT_PPG_TRIM_FRACTIONS = (0.0, 0.0)
+
+
+def basic_feature_keys(dataset: str) -> tuple:
+    return BASIC_FEATURE_KEYS.get(dataset, DEFAULT_BASIC_FEATURE_KEYS)
 
 
 def ppg_sampling_rate(dataset: str) -> float:

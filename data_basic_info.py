@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 
-from config import BASIC_FEATURE_KEYS
 from utils import safe_float
 
 
@@ -24,7 +23,7 @@ def _subject_ref(row: pd.Series):
     return _first_present(row, ['subject_ID', 'ID'])
 
 
-def extract_basic_info(row: pd.Series) -> dict:
+def extract_basic_info(row: pd.Series, feature_keys=()) -> dict:
     sex_raw = _first_present(row, ['Sex(M/F)', 'Gender'])
     sex_value = str(sex_raw).strip().upper()
     sex = np.nan
@@ -37,14 +36,14 @@ def extract_basic_info(row: pd.Series) -> dict:
     subject_ref = _subject_ref(row)
 
     age = safe_float(_first_present(row, ['Age(year)', 'Age']))
-    if 'age' in BASIC_FEATURE_KEYS and np.isnan(age):
+    if 'age' in feature_keys and np.isnan(age):
         print("Invalid age value, subject_ID:", subject_ref)
         valid = False
 
     height = safe_float(_first_present(row, ['Height(cm)', 'Height']))
     weight = safe_float(_first_present(row, ['Weight(kg)', 'Weight']))
     if (
-        ('bmi' in BASIC_FEATURE_KEYS or 'height' in BASIC_FEATURE_KEYS or 'weight' in BASIC_FEATURE_KEYS)
+        ('bmi' in feature_keys or 'height' in feature_keys or 'weight' in feature_keys)
         and (np.isnan(height) or np.isnan(weight))
     ):
         print("Invalid height/weight value, subject_ID:", subject_ref)
@@ -74,4 +73,4 @@ def extract_basic_info(row: pd.Series) -> dict:
         # 'blood_pressure_diastolic': diastolic,
         # 'heart_rate': heart_rate,
     }
-    return {k: out[k] for k in BASIC_FEATURE_KEYS}
+    return {k: out[k] for k in feature_keys}

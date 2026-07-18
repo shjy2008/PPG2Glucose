@@ -9,8 +9,8 @@ from utils import (
     safe_float,
 )
 from config import (
-    BASIC_FEATURE_KEYS,
     DEFAULT_WINDOW_SECONDS,
+    basic_feature_keys,
     ppg_sampling_rate,
     ppg_trim_fractions,
 )
@@ -157,8 +157,9 @@ def _load_labels_rawdata_dataset(
 
         subject_id_int = int(subject_id)
 
-        basic_info_dict = extract_basic_info(row)
-        if BASIC_FEATURE_KEYS and not basic_info_dict:
+        keys = basic_feature_keys(dataset_name)
+        basic_info_dict = extract_basic_info(row, keys)
+        if keys and not basic_info_dict:
             continue
 
         signal_path = _signal_path(raw_data_dir, subject_key, session_key)
@@ -214,8 +215,9 @@ def _load_southwest_dataset(
             print('Skipping subject', row['subject_ID'], 'with invalid ID or target', target)
             continue
 
-        basic_info_dict = extract_basic_info(row)
-        if BASIC_FEATURE_KEYS and not basic_info_dict:
+        keys = basic_feature_keys('southwest')
+        basic_info_dict = extract_basic_info(row, keys)
+        if keys and not basic_info_dict:
             continue
 
         subject_id_int = int(subject_id)
@@ -361,11 +363,12 @@ def _load_labels_rawdata_waveform_dataset(
             continue
 
         if include_basic:
-            basic_info_dict = extract_basic_info(row)
-            if BASIC_FEATURE_KEYS and not basic_info_dict:
+            keys = basic_feature_keys(dataset_name)
+            basic_info_dict = extract_basic_info(row, keys)
+            if keys and not basic_info_dict:
                 continue
             basic_values = np.asarray(
-                [basic_info_dict[key] for key in BASIC_FEATURE_KEYS],
+                [basic_info_dict[key] for key in keys],
                 dtype=np.float32,
             )
         else:
@@ -431,11 +434,12 @@ def _load_southwest_waveform_dataset(
             continue
 
         if include_basic:
-            basic_info_dict = extract_basic_info(row)
-            if BASIC_FEATURE_KEYS and not basic_info_dict:
+            keys = basic_feature_keys('southwest')
+            basic_info_dict = extract_basic_info(row, keys)
+            if keys and not basic_info_dict:
                 continue
             basic_values = np.asarray(
-                [basic_info_dict[key] for key in BASIC_FEATURE_KEYS],
+                [basic_info_dict[key] for key in keys],
                 dtype=np.float32,
             )
         else:
