@@ -10,8 +10,14 @@ from utils import (
 )
 from config import (
     DEFAULT_WINDOW_SECONDS,
+    PPG_SQA_WINDOW_SECONDS,
     basic_feature_keys,
+    ppg_best_segment_seconds,
+    ppg_feature_groups,
+    ppg_filter,
     ppg_sampling_rate,
+    ppg_sqa_threshold,
+    ppg_target_fs,
     ppg_trim_fractions,
 )
 from data_basic_info import extract_basic_info
@@ -33,13 +39,34 @@ def _ppg_feature_dicts(
 ) -> list[dict]:
     """Full-signal features when window_seconds<=0; else one dict per window."""
     trim_fractions = ppg_trim_fractions(dataset_name)
+    filter_name = ppg_filter(dataset_name)
+    target_fs = ppg_target_fs(dataset_name)
+    best_segment_seconds = ppg_best_segment_seconds(dataset_name)
+    feature_groups = ppg_feature_groups(dataset_name)
+    sqa_threshold = ppg_sqa_threshold(dataset_name)
     if window_seconds is None or window_seconds <= 0:
-        return [extract_raw_ppg(signal_path, fs=fs, trim_fractions=trim_fractions)]
+        features = extract_raw_ppg(
+            signal_path,
+            fs=fs,
+            trim_fractions=trim_fractions,
+            filter_name=filter_name,
+            target_fs=target_fs,
+            best_segment_seconds=best_segment_seconds,
+            feature_groups=feature_groups,
+            sqa_threshold=sqa_threshold,
+            sqa_window_seconds=PPG_SQA_WINDOW_SECONDS,
+        )
+        return [] if features is None else [features]
     return extract_raw_ppg_windows(
         signal_path,
         fs=fs,
         window_seconds=window_seconds,
         trim_fractions=trim_fractions,
+        filter_name=filter_name,
+        target_fs=target_fs,
+        best_segment_seconds=best_segment_seconds,
+        feature_groups=feature_groups,
+        sqa_threshold=sqa_threshold,
     )
 
 def resolve_dataset_root(dataset: str | Path | None = None) -> Path:
@@ -173,7 +200,7 @@ def _load_labels_rawdata_dataset(
             dataset_name=dataset_name,
         )
         if not feature_dicts:
-            print('Skipping', label_path.name, 'because signal is empty')
+            print('Skipping', label_path.name, 'because signal is empty or failed SQA')
             continue
 
         for window_id, raw_ppg_dict in enumerate(feature_dicts):
@@ -233,7 +260,7 @@ def _load_southwest_dataset(
             dataset_name='southwest',
         )
         if not feature_dicts:
-            print('Skipping subject', subject_id_int, 'because signal is empty')
+            print('Skipping subject', subject_id_int, 'because signal is empty or failed SQA')
             continue
 
         for window_id, raw_ppg_dict in enumerate(feature_dicts):
@@ -380,7 +407,11 @@ def _load_labels_rawdata_waveform_dataset(
             continue
 
         waveform = read_signal_waveform(
-            signal_path, ppg_trim_fractions(dataset_name)
+            signal_path,
+            trim_fractions=ppg_trim_fractions(dataset_name),
+            fs=ppg_sampling_rate(dataset_name),
+            filter_name=ppg_filter(dataset_name),
+            target_fs=ppg_target_fs(dataset_name),
         ).astype(np.float32, copy=False)
         if waveform.size == 0:
             print('Skipping', label_path.name, 'because signal is empty')
@@ -446,7 +477,11 @@ def _load_southwest_waveform_dataset(
             basic_values = np.empty(0, dtype=np.float32)
 
         waveform = read_signal_waveform(
-            signal_path, ppg_trim_fractions('southwest')
+            signal_path,
+            trim_fractions=ppg_trim_fractions('southwest'),
+            fs=ppg_sampling_rate('southwest'),
+            filter_name=ppg_filter('southwest'),
+            target_fs=ppg_target_fs('southwest'),
         ).astype(np.float32, copy=False)
         if waveform.size == 0:
             print('Skipping subject', subject_id_int, 'because signal is empty')

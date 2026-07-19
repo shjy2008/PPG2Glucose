@@ -36,8 +36,12 @@ DEFAULT_PARAMS = {
 
 # Dataset-specific overrides; edit these independently after tuning each dataset.
 DATASET_PARAMS = {
-    'southwest': {},
-    'MUST': {'iterations': 100},
+    'southwest': {'depth': 4,},
+    # MUST: depth 3 → 4 with age+weight + g3-g6: MAE 0.7109 → 0.7075, R2 -0.0140 → +0.0003.
+    'MUST': {
+        # 'iterations': 500,
+        'depth': 4,
+        },
     'vitaldb': {},
 }
 
@@ -100,6 +104,14 @@ def main():
     window_seconds = (
         DEFAULT_WINDOW_SECONDS if args.window_seconds is None else args.window_seconds
     )
+    from config import (
+        ppg_best_segment_seconds,
+        ppg_feature_groups,
+        ppg_filter,
+        ppg_sqa_threshold,
+        ppg_target_fs,
+    )
+
     ds = data_loader.load_dataset(
         args.dataset,
         max_samples=args.max_samples,
@@ -111,7 +123,14 @@ def main():
         'subject_ID' in ds.columns and ds.groupby('subject_ID').size().max() > 1
     )
     subject_wise = args.subject_wise or multi_sample_subjects
-    print(f"Using dataset: {args.dataset} (window_seconds={window_seconds})")
+    print(
+        f"Using dataset: {args.dataset} "
+        f"(window_seconds={window_seconds}, ppg_filter={ppg_filter(args.dataset)}, "
+        f"target_fs={ppg_target_fs(args.dataset)}, "
+        f"best_segment_seconds={ppg_best_segment_seconds(args.dataset)}, "
+        f"feature_groups={ppg_feature_groups(args.dataset)}, "
+        f"sqa_threshold={ppg_sqa_threshold(args.dataset)})"
+    )
     if subject_wise:
         X, y, feature_names, groups = data_loader.split(ds, return_groups=True)
         if groups is None:

@@ -5,7 +5,16 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from config import DEFAULT_PPG_SAMPLING_RATE, DEFAULT_PPG_TRIM_FRACTIONS
+from config import (
+    DEFAULT_PPG_BEST_SEGMENT_SECONDS,
+    DEFAULT_PPG_FEATURE_GROUPS,
+    DEFAULT_PPG_FILTER,
+    DEFAULT_PPG_SAMPLING_RATE,
+    DEFAULT_PPG_TARGET_FS,
+    DEFAULT_PPG_TRIM_FRACTIONS,
+    PPG_BEST_SEGMENT_HOP_SECONDS,
+    PPG_SQA_WINDOW_SECONDS,
+)
 from utils import safe_float
 
 
@@ -34,6 +43,214 @@ def trim_signal(
     return values[start:end]
 
 
+def _odd_window(samples: int, minimum: int = 5) -> int:
+    size = max(int(samples), minimum)
+    if size % 2 == 0:
+        size += 1
+    return size
+
+
+def mswf_filter(
+    signal: np.ndarray,
+    fs: float,
+    *,
+    poly_order: int = 2,
+    small_window_seconds: float = 0.05,
+    large_window_seconds: float = 1.0,
+    n_iterations: int = 3,
+) -> np.ndarray:
+    """Multi-size weighted fitting (Chen et al., JBHI 2024, Algorithm 1).
+
+    Stage 1: local polynomial smoothing (Savitzky–Golay).
+    Stage 2: iterative Gaussian-weighted large-window baseline estimate, then subtract.
+    """
+    values = np.asarray(signal, dtype=float).reshape(-1)
+    n = values.size
+    if n < 8 or not np.isfinite(values).all():
+        return values
+
+    sw = _odd_window(int(round(small_window_seconds * fs)), minimum=5)
+    lw = _odd_window(int(round(large_window_seconds * fs)), minimum=sw + 2)
+    sw = min(sw, n if n % 2 == 1 else n - 1)
+    lw = min(lw, n if n % 2 == 1 else n - 1)
+    if sw < 5 or lw <= sw:
+        return values
+
+    k_smooth = min(poly_order, sw - 1)
+    k_base = min(poly_order, lw - 1)
+    try:
+        from scipy.signal import savgol_filter
+
+        smoothed = savgol_filter(values, window_length=sw, polyorder=k_smooth, mode='interp')
+    except Exception:
+        smoothed = values.copy()
+
+    # Coarse-grid IRLS baseline (Gaussian weights), then interpolate to full length.
+    half = lw // 2
+    step = max(1, half // 2)
+    centers = np.arange(0, n, step, dtype=int)
+    if centers[-1] != n - 1:
+        centers = np.append(centers, n - 1)
+
+    x_all = np.arange(n, dtype=float)
+    baseline_at_centers = np.empty(centers.size, dtype=float)
+    for ci, center in enumerate(centers):
+        left = max(0, center - half)
+        right = min(n, center + half + 1)
+        x = x_all[left:right]
+        y = smoothed[left:right]
+        if y.size <= k_base:
+            baseline_at_centers[ci] = float(np.mean(y))
+            continue
+
+        # Map local x to [-1, 1] as in the paper's Stage 2.
+        x_norm = 2.0 * (x - x[0]) / max(x[-1] - x[0], 1.0) - 1.0
+        # Initial Gaussian weights around the center in normalized coords.
+        xc = 2.0 * (center - x[0]) / max(x[-1] - x[0], 1.0) - 1.0
+        w = np.exp(-0.5 * ((x_norm - xc) / 0.45) ** 2)
+        w = np.maximum(w, 1e-6)
+
+        for _ in range(max(1, n_iterations)):
+            coeffs = np.polynomial.polynomial.polyfit(x_norm, y, deg=k_base, w=w)
+            y_hat = np.polynomial.polynomial.polyval(x_norm, coeffs)
+            resid = np.abs(y - y_hat)
+            dm = float(np.median(resid))
+            if dm < 1e-12:
+                break
+            # Gaussian reweight on residual / median residual.
+            w = np.exp(-0.5 * (resid / dm) ** 2)
+            w = np.maximum(w, 1e-6)
+
+        baseline_at_centers[ci] = float(
+            np.polynomial.polynomial.polyval(
+                np.asarray([xc]),
+                np.polynomial.polynomial.polyfit(x_norm, y, deg=k_base, w=w),
+            )[0]
+        )
+
+    baseline = np.interp(x_all, centers.astype(float), baseline_at_centers)
+    return smoothed - baseline
+
+
+def apply_ppg_filter(
+    signal: np.ndarray,
+    fs: float,
+    filter_name: str = DEFAULT_PPG_FILTER,
+) -> np.ndarray:
+    name = (filter_name or 'none').strip().lower()
+    if name in {'', 'none', 'off', 'false'}:
+        return np.asarray(signal, dtype=float).reshape(-1)
+    if name == 'mswf':
+        return mswf_filter(signal, fs)
+    raise ValueError(f'Unknown PPG filter: {filter_name!r} (expected none|mswf)')
+
+
+def effective_sampling_rate(source_fs: float, target_fs: float | None) -> float:
+    """Return the sampling rate after optional downsampling."""
+    if target_fs is None:
+        return float(source_fs)
+    target = float(target_fs)
+    if target <= 0:
+        raise ValueError(f'target_fs must be positive, got {target_fs!r}')
+    source = float(source_fs)
+    if target >= source:
+        return source
+    return target
+
+
+def downsample_signal(
+    signal: np.ndarray,
+    source_fs: float,
+    target_fs: float | None,
+) -> np.ndarray:
+    """Resample to target_fs when lower than source_fs; otherwise return unchanged."""
+    values = np.asarray(signal, dtype=float).reshape(-1)
+    fs_out = effective_sampling_rate(source_fs, target_fs)
+    source = float(source_fs)
+    if values.size == 0 or fs_out >= source:
+        return values
+
+    n_out = max(1, int(round(values.size * fs_out / source)))
+    if n_out >= values.size:
+        return values
+    try:
+        from scipy.signal import resample
+
+        return resample(values, n_out).astype(float, copy=False)
+    except Exception:
+        indices = np.linspace(0, values.size - 1, n_out).astype(int)
+        return values[indices]
+
+
+def ppg_ssqi(signal: np.ndarray) -> float:
+    """Skewness-based signal quality index (Elgendi / Chen et al. JBHI 2024)."""
+    values = np.asarray(signal, dtype=float).reshape(-1)
+    if values.size < 8:
+        return 0.0
+    mean = float(np.mean(values))
+    std = float(np.std(values))
+    if std < 1e-12:
+        return 0.0
+    centered = (values - mean) / std
+    return float(np.mean(centered ** 3))
+
+
+def select_best_segment(
+    signal: np.ndarray,
+    fs: float,
+    window_seconds: float | None,
+    hop_seconds: float = PPG_BEST_SEGMENT_HOP_SECONDS,
+) -> np.ndarray:
+    """Select the overlapping full window with the highest skewness SSQI."""
+    values = np.asarray(signal, dtype=float).reshape(-1)
+    if values.size == 0 or window_seconds is None:
+        return values
+
+    window_samples = int(round(float(window_seconds) * float(fs)))
+    hop_samples = int(round(float(hop_seconds) * float(fs)))
+    if window_samples < 1 or hop_samples < 1:
+        raise ValueError('best-segment window and hop must yield at least one sample')
+    if values.size <= window_samples:
+        return values
+
+    starts = range(0, values.size - window_samples + 1, hop_samples)
+    best_start = max(
+        starts,
+        key=lambda start: ppg_ssqi(values[start : start + window_samples]),
+    )
+    return values[best_start : best_start + window_samples]
+
+
+def select_sqa_windows(
+    signal: np.ndarray,
+    fs: float,
+    threshold: float,
+    window_seconds: float = PPG_SQA_WINDOW_SECONDS,
+) -> list[np.ndarray]:
+    """Keep non-overlapping windows with SSQI > threshold."""
+    return [
+        window
+        for window in segment_signal(signal, fs=fs, window_seconds=window_seconds)
+        if ppg_ssqi(window) > float(threshold)
+    ]
+
+
+def apply_sqa_mask(
+    signal: np.ndarray,
+    fs: float,
+    threshold: float | None,
+    window_seconds: float = PPG_SQA_WINDOW_SECONDS,
+) -> np.ndarray | None:
+    """Concatenate SSQI-accepted windows. None if SQA rejects the whole signal."""
+    values = np.asarray(signal, dtype=float).reshape(-1)
+    if threshold is None:
+        return values
+    good = select_sqa_windows(values, fs=fs, threshold=threshold, window_seconds=window_seconds)
+    if not good:
+        return None
+    return np.concatenate(good)
+
+
 def extract_ppg_bpm(row: pd.Series) -> dict:
     ppg_bpm = safe_float(row.get('PPG/BPM'))
     sppg_bpm = safe_float(row.get('SPPG/BPM'))
@@ -48,10 +265,15 @@ def extract_ppg_bpm(row: pd.Series) -> dict:
 def read_signal_waveform(
     signal_path: Path,
     trim_fractions: tuple[float, float] = DEFAULT_PPG_TRIM_FRACTIONS,
+    fs: float = DEFAULT_PPG_SAMPLING_RATE,
+    filter_name: str = DEFAULT_PPG_FILTER,
+    target_fs: float | None = DEFAULT_PPG_TARGET_FS,
 ) -> np.ndarray:
-    """Return PPG samples from a signal file."""
+    """Return PPG samples (trim → filter at native fs → optional downsample)."""
     signal = _read_signal_values(signal_path)
-    return trim_signal(signal, *trim_fractions)
+    signal = trim_signal(signal, *trim_fractions)
+    signal = apply_ppg_filter(signal, fs=fs, filter_name=filter_name)
+    return downsample_signal(signal, source_fs=fs, target_fs=target_fs)
 
 
 def _read_signal_values(signal_path: Path) -> np.ndarray:
@@ -322,19 +544,97 @@ def _segment_features(signal: np.ndarray, prefix: str) -> dict:
     }
 
 
-def extract_ppg_features(signal: np.ndarray, fs: float = DEFAULT_PPG_SAMPLING_RATE) -> dict:
+def _quality_features(signal: np.ndarray, prefix: str, fs: float) -> dict:
+    """Quality indicators used as model features without discarding signal data."""
+    values = np.asarray(signal, dtype=float).reshape(-1)
+
+    # Five non-overlapping 2 s checks for a typical 10 s MUST recording.
+    window_samples = max(8, int(round(2.0 * float(fs))))
+    window_scores = [
+        ppg_ssqi(values[start : start + window_samples])
+        for start in range(0, values.size - window_samples + 1, window_samples)
+    ]
+    accepted_fraction = (
+        float(np.mean(np.asarray(window_scores) > 0.3)) if window_scores else 0.0
+    )
+
+    peak_regularity = 0.0
+    noise_ratio = 0.0
+    try:
+        from scipy.signal import butter, find_peaks, resample, sosfiltfilt
+
+        # Quality scoring does not need the native 2175 Hz resolution.
+        quality_fs = min(float(fs), 100.0)
+        n_quality = max(16, int(round(values.size * quality_fs / float(fs))))
+        quality_signal = (
+            resample(values, n_quality) if n_quality < values.size else values.copy()
+        )
+        centered = quality_signal - np.mean(quality_signal)
+        sos = butter(3, [0.5, 8.0], btype='bandpass', fs=quality_fs, output='sos')
+        pulse_band = sosfiltfilt(sos, centered)
+        peaks, _ = find_peaks(
+            pulse_band,
+            distance=max(3, int(round(0.3 * quality_fs))),
+            prominence=max(0.15 * float(np.std(pulse_band)), 1e-9),
+        )
+        if peaks.size >= 3:
+            ibi = np.diff(peaks).astype(float) / quality_fs
+            ibi_mean = float(np.mean(ibi))
+            if ibi_mean > 1e-9:
+                peak_regularity = float(1.0 / (1.0 + np.std(ibi) / ibi_mean))
+
+        spectrum = np.abs(np.fft.rfft(centered)) ** 2
+        freqs = np.fft.rfftfreq(centered.size, d=1.0 / quality_fs)
+        pulse_power = float(np.sum(spectrum[(freqs >= 0.5) & (freqs < 8.0)]))
+        noise_power = float(np.sum(spectrum[(freqs >= 8.0) & (freqs <= 20.0)]))
+        relevant_power = pulse_power + noise_power
+        if relevant_power > 1e-12:
+            noise_ratio = noise_power / relevant_power
+    except Exception:
+        # Keep feature extraction usable without scipy.
+        smooth = _moving_average(values, max(3, int(round(0.05 * float(fs)))))
+        total_var = float(np.var(values))
+        if total_var > 1e-12:
+            noise_ratio = float(np.var(values - smooth) / total_var)
+
+    return {
+        f'{prefix}ppg_ssqi': ppg_ssqi(values),
+        f'{prefix}ppg_peak_regularity': peak_regularity,
+        f'{prefix}ppg_noise_ratio': noise_ratio,
+        f'{prefix}ppg_accepted_window_fraction': accepted_fraction,
+    }
+
+
+def extract_ppg_features(
+    signal: np.ndarray,
+    fs: float = DEFAULT_PPG_SAMPLING_RATE,
+    feature_groups: tuple[str, ...] = DEFAULT_PPG_FEATURE_GROUPS,
+) -> dict:
     """Extract hand-crafted PPG features from a 1-D waveform."""
     signal = np.asarray(signal, dtype=float).reshape(-1)
     if signal.size == 0:
         raise ValueError('empty signal')
 
+    enabled = set(feature_groups)
+    unknown = enabled.difference({'g1', 'g2', 'g3', 'g4', 'g5', 'g6', 'g7'})
+    if unknown:
+        raise ValueError(f'Unknown PPG feature groups: {sorted(unknown)}')
+
     features = {}
-    features.update(_distribution_features(signal, prefix='g1_'))
-    features.update(_derivative_features(signal, prefix='g2_'))
-    features.update(_pulse_features(signal, prefix='g3_'))
-    features.update(_frequency_domain_features(signal, prefix='g4_', fs=fs))
-    features.update(_periodic_features(signal, prefix='g5_', fs=fs))
-    features.update(_segment_features(signal, prefix='g6_'))
+    if 'g1' in enabled:
+        features.update(_distribution_features(signal, prefix='g1_'))
+    if 'g2' in enabled:
+        features.update(_derivative_features(signal, prefix='g2_'))
+    if 'g3' in enabled:
+        features.update(_pulse_features(signal, prefix='g3_'))
+    if 'g4' in enabled:
+        features.update(_frequency_domain_features(signal, prefix='g4_', fs=fs))
+    if 'g5' in enabled:
+        features.update(_periodic_features(signal, prefix='g5_', fs=fs))
+    if 'g6' in enabled:
+        features.update(_segment_features(signal, prefix='g6_'))
+    if 'g7' in enabled:
+        features.update(_quality_features(signal, prefix='g7_', fs=fs))
     return features
 
 
@@ -342,9 +642,31 @@ def extract_raw_ppg(
     signal_path: str | Path,
     fs: float = DEFAULT_PPG_SAMPLING_RATE,
     trim_fractions: tuple[float, float] = DEFAULT_PPG_TRIM_FRACTIONS,
-) -> dict:
-    signal = read_signal_waveform(Path(signal_path), trim_fractions)
-    return extract_ppg_features(signal, fs=fs)
+    filter_name: str = DEFAULT_PPG_FILTER,
+    target_fs: float | None = DEFAULT_PPG_TARGET_FS,
+    best_segment_seconds: float | None = DEFAULT_PPG_BEST_SEGMENT_SECONDS,
+    feature_groups: tuple[str, ...] = DEFAULT_PPG_FEATURE_GROUPS,
+    sqa_threshold: float | None = None,
+    sqa_window_seconds: float = PPG_SQA_WINDOW_SECONDS,
+) -> dict | None:
+    signal = read_signal_waveform(
+        Path(signal_path),
+        trim_fractions=trim_fractions,
+        fs=fs,
+        filter_name=filter_name,
+        target_fs=target_fs,
+    )
+    fs_eff = effective_sampling_rate(fs, target_fs)
+    signal = select_best_segment(signal, fs=fs_eff, window_seconds=best_segment_seconds)
+    signal = apply_sqa_mask(
+        signal,
+        fs=fs_eff,
+        threshold=sqa_threshold,
+        window_seconds=sqa_window_seconds,
+    )
+    if signal is None or signal.size == 0:
+        return None
+    return extract_ppg_features(signal, fs=fs_eff, feature_groups=feature_groups)
 
 
 def segment_signal(signal: np.ndarray, fs: float, window_seconds: float) -> list[np.ndarray]:
@@ -369,9 +691,26 @@ def extract_raw_ppg_windows(
     fs: float,
     window_seconds: float,
     trim_fractions: tuple[float, float] = DEFAULT_PPG_TRIM_FRACTIONS,
+    filter_name: str = DEFAULT_PPG_FILTER,
+    target_fs: float | None = DEFAULT_PPG_TARGET_FS,
+    best_segment_seconds: float | None = DEFAULT_PPG_BEST_SEGMENT_SECONDS,
+    feature_groups: tuple[str, ...] = DEFAULT_PPG_FEATURE_GROUPS,
+    sqa_threshold: float | None = None,
 ) -> list[dict]:
-    signal = read_signal_waveform(Path(signal_path), trim_fractions)
-    return [
-        extract_ppg_features(window, fs=fs)
-        for window in segment_signal(signal, fs=fs, window_seconds=window_seconds)
-    ]
+    signal = read_signal_waveform(
+        Path(signal_path),
+        trim_fractions=trim_fractions,
+        fs=fs,
+        filter_name=filter_name,
+        target_fs=target_fs,
+    )
+    fs_eff = effective_sampling_rate(fs, target_fs)
+    signal = select_best_segment(signal, fs=fs_eff, window_seconds=best_segment_seconds)
+    features = []
+    for window in segment_signal(signal, fs=fs_eff, window_seconds=window_seconds):
+        if sqa_threshold is not None and ppg_ssqi(window) <= float(sqa_threshold):
+            continue
+        features.append(
+            extract_ppg_features(window, fs=fs_eff, feature_groups=feature_groups)
+        )
+    return features

@@ -7,7 +7,9 @@ USE_GPU = False
 # ('sex', 'age', 'height', 'weight'), ('age', 'height', 'weight', 'bmi')
 BASIC_FEATURE_KEYS = {
     'southwest': ('age', 'height', 'weight', 'bmi'),
-    'MUST': (),
+    # MUST: age+weight + g3-g6; with CatBoost depth=4 → MAE 0.7075, R2 +0.0003.
+    # (depth=3 was MAE 0.7109 / R2 -0.0140; age-only baseline MAE 0.7119 / R2 -0.0182)
+    'MUST': ('age', 'weight'),
     'vitaldb': (),
 }
 DEFAULT_BASIC_FEATURE_KEYS = ()
@@ -23,6 +25,24 @@ PPG_SAMPLING_RATE = {
 }
 DEFAULT_PPG_SAMPLING_RATE = 200
 
+# Hand-crafted PPG feature groups enabled per dataset.
+# g1=distribution, g2=derivatives, g3=pulse, g4=frequency,
+# g5=periodicity, g6=signal segments, g7=optional signal-quality indicators.
+DEFAULT_PPG_FEATURE_GROUPS = ('g1', 'g2', 'g3', 'g4', 'g5', 'g6')
+PPG_FEATURE_GROUPS = {
+    # MUST ablation: g3-g6 best among group sets; age+weight demo improves further.
+    'MUST': (
+        # 'g1',
+        # 'g2',
+        'g3',
+        'g4',
+        'g5',
+        'g6',
+        ),
+    'southwest': DEFAULT_PPG_FEATURE_GROUPS,
+    'vitaldb': DEFAULT_PPG_FEATURE_GROUPS,
+}
+
 # 0 = full signal (one sample). >0 = non-overlapping windows in seconds.
 DEFAULT_WINDOW_SECONDS = 0.0
 
@@ -34,6 +54,58 @@ PPG_TRIM_FRACTIONS = {
 }
 DEFAULT_PPG_TRIM_FRACTIONS = (0.0, 0.0)
 
+# PPG time-domain filter applied after trim, before feature extraction.
+# Options: 'none', 'mswf' (Chen et al. JBHI 2024 multi-size weighted fitting).
+# Try-1 southwest CatBoost: mswf raised MAE 0.5785 → 0.6119, so default off.
+# MUST CatBoost ablation (subject-wise 5x5 CV, baseline MAE 0.7311):
+# target_fs=100 only 0.7633; mswf only 0.7964; combined 0.7950. Keep both off.
+# Try-4 MUST: fs-aware physiological feature units (IBI/lag in seconds, cardiac
+# bands 0.5–4 Hz, rate-normalized derivatives) → MAE 0.7468 (no gain). Keep fixes.
+PPG_FILTER = {
+    'MUST': 'none',
+    'southwest': 'none',
+    'vitaldb': 'none',
+}
+DEFAULT_PPG_FILTER = 'none'
+
+# Optional rate-based downsample after filter (Hz). None keeps native PPG_SAMPLING_RATE.
+# Applied in shared PPG prep so feature extraction uses the reduced rate.
+# MUST downsample-only 2175→100 Hz raised MAE 0.7311 → 0.7633.
+PPG_TARGET_FS = {
+    'MUST': None,  # 100.0
+    'southwest': None,
+    'vitaldb': None,
+}
+DEFAULT_PPG_TARGET_FS = None
+
+# Optional best-window selection before feature extraction.
+# A positive duration selects the overlapping window with the highest skewness SSQI.
+# MUST 4 s window / 1 s hop raised CatBoost MAE 0.7311 → 0.7685, so default off.
+PPG_BEST_SEGMENT_SECONDS = {
+    'MUST': None,  # 4.0
+    'southwest': None,
+    'vitaldb': None,
+}
+DEFAULT_PPG_BEST_SEGMENT_SECONDS = None
+PPG_BEST_SEGMENT_HOP_SECONDS = 1.0
+
+# Skewness-based SSQI threshold (Chen et al. JBHI 2024). None disables SQA.
+# Accept 6 s windows with SSQI > threshold, then concatenate for full-signal features.
+# Try-2 southwest CatBoost: sqa=0.3 kept 191/252, MAE 0.5785 → 0.6001, so default off.
+PPG_SQA_THRESHOLD = {
+    'MUST': None, # 0.3
+    'southwest': None,
+    'vitaldb': None,
+}
+DEFAULT_PPG_SQA_THRESHOLD = None
+PPG_SQA_WINDOW_SECONDS = 6.0
+
+# Drop glucose targets outside this quantile range (mmol/L).
+TARGET_OUTLIER_LOWER_Q = 0
+TARGET_OUTLIER_UPPER_Q = 1
+# TARGET_OUTLIER_LOWER_Q = 0.01
+# TARGET_OUTLIER_UPPER_Q = 0.99
+
 
 def basic_feature_keys(dataset: str) -> tuple:
     return BASIC_FEATURE_KEYS.get(dataset, DEFAULT_BASIC_FEATURE_KEYS)
@@ -43,14 +115,29 @@ def ppg_sampling_rate(dataset: str) -> float:
     return PPG_SAMPLING_RATE.get(dataset, DEFAULT_PPG_SAMPLING_RATE)
 
 
+def ppg_feature_groups(dataset: str) -> tuple[str, ...]:
+    return PPG_FEATURE_GROUPS.get(dataset, DEFAULT_PPG_FEATURE_GROUPS)
+
+
 def ppg_trim_fractions(dataset: str) -> tuple[float, float]:
     return PPG_TRIM_FRACTIONS.get(dataset, DEFAULT_PPG_TRIM_FRACTIONS)
 
-# Drop glucose targets outside this quantile range (mmol/L).
-TARGET_OUTLIER_LOWER_Q = 0
-TARGET_OUTLIER_UPPER_Q = 1
-# TARGET_OUTLIER_LOWER_Q = 0.01
-# TARGET_OUTLIER_UPPER_Q = 0.99
+
+def ppg_filter(dataset: str) -> str:
+    return PPG_FILTER.get(dataset, DEFAULT_PPG_FILTER)
+
+
+def ppg_target_fs(dataset: str):
+    return PPG_TARGET_FS.get(dataset, DEFAULT_PPG_TARGET_FS)
+
+
+def ppg_best_segment_seconds(dataset: str):
+    return PPG_BEST_SEGMENT_SECONDS.get(dataset, DEFAULT_PPG_BEST_SEGMENT_SECONDS)
+
+
+def ppg_sqa_threshold(dataset: str):
+    return PPG_SQA_THRESHOLD.get(dataset, DEFAULT_PPG_SQA_THRESHOLD)
+
 
 def catboost_kwargs() -> dict:
     if USE_GPU:
