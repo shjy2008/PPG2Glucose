@@ -241,18 +241,61 @@ def run_repeated_kfold_comparison(
     n_splits: int = 5,
     include_ensemble: bool = False,
     ensemble_name: str = 'ensemble',
+    ensemble_weights: Optional[Sequence[float]] = None,
+    groups: Optional[np.ndarray] = None,
     verbose: bool = True,
 ) -> Tuple[Dict[str, list[dict]], pd.DataFrame]:
-    X, y = _prepare_xy(X, y)
+    if groups is not None:
+        groups = np.asarray(groups)
+        if len(groups) != len(y):
+            raise ValueError(f'groups length ({len(groups)}) must match y ({len(y)})')
+        X = X.replace([np.inf, -np.inf], np.nan)
+        mask = y.notna().to_numpy()
+        if not mask.all():
+            dropped = int((~mask).sum())
+            print(f"Warning: dropping {dropped} rows with missing target before CV")
+        X = X.loc[mask].reset_index(drop=True)
+        y = y.loc[mask].reset_index(drop=True)
+        groups = groups[mask]
+    else:
+        X, y = _prepare_xy(X, y)
     seeds = DEFAULT_SEEDS
     model_names = list(factories.keys())
     use_ensemble = include_ensemble and len(model_names) > 1
     tracked_names = [*model_names, ensemble_name] if use_ensemble else model_names
     y_values = y.values
 
+    weights = None
+    if use_ensemble:
+        if ensemble_weights is None:
+            weights = np.full(len(model_names), 1.0 / len(model_names), dtype=float)
+        else:
+            weights = np.asarray(ensemble_weights, dtype=float)
+            if weights.shape != (len(model_names),):
+                raise ValueError(
+                    f'ensemble_weights length ({len(weights)}) must match '
+                    f'number of models ({len(model_names)})'
+                )
+            if np.any(weights < 0):
+                raise ValueError('ensemble_weights must be non-negative')
+            weight_sum = float(weights.sum())
+            if weight_sum <= 0:
+                raise ValueError('ensemble_weights must sum to a positive value')
+            weights = weights / weight_sum
+
     _warn_nan_features(X, verbose)
     if verbose:
-        extras = [f'Ensemble: mean of {", ".join(model_names)}'] if use_ensemble else []
+        extras = []
+        if groups is not None:
+            extras.append(
+                f'Split: GroupKFold by subject_ID '
+                f'({len(np.unique(groups))} unique subjects)'
+            )
+        if use_ensemble:
+            weight_desc = ', '.join(
+                f'{name}={weight:.3f}' for name, weight in zip(model_names, weights)
+            )
+            extras.append(f'Ensemble: weighted mean ({weight_desc})')
         evaluation.print_cv_intro(
             y_values,
             n_splits,
@@ -276,7 +319,8 @@ def run_repeated_kfold_comparison(
             predictions_by_model[name] = predictions
 
         if use_ensemble:
-            predictions_by_model[ensemble_name] = np.mean(fold_predictions, axis=0)
+            stacked = np.column_stack(fold_predictions)
+            predictions_by_model[ensemble_name] = stacked @ weights
         return predictions_by_model
 
     fold_metrics_by_model, oof_by_model = _run_repeated_kfold_cv(
@@ -285,6 +329,7 @@ def run_repeated_kfold_comparison(
         tracked_names,
         n_splits=n_splits,
         seeds=seeds,
+        groups=groups,
         verbose=verbose,
         fold_log=lambda metrics_by_model: ' | '.join(
             f'{name} MAE={metrics["mae"]:.4f}' for name, metrics in metrics_by_model.items()
