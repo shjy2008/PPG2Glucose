@@ -303,18 +303,20 @@ def load_waveform_dataset(
     include_basic: bool = True,
     resample: bool = False,
     max_samples: int | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    return_groups: bool = False,
+) -> tuple[np.ndarray, ...]:
     """Load per-session PPG waveforms and glucose targets (mmol/L).
 
     Returns:
         signals: (n_samples, signal_length)
         demographics: (n_samples, 4) or (n_samples, 0) when include_basic is False
         targets: (n_samples,)
+        groups: subject IDs, returned only when return_groups is True
     """
     if labels_dir is not None or raw_data_dir is not None:
         if labels_dir is None or raw_data_dir is None:
             raise ValueError('labels_dir and raw_data_dir must both be provided')
-        signals, demographics, targets = _load_labels_rawdata_waveform_dataset(
+        signals, demographics, targets, groups = _load_labels_rawdata_waveform_dataset(
             labels_dir,
             raw_data_dir,
             'MUST',
@@ -327,7 +329,7 @@ def load_waveform_dataset(
         root = resolve_dataset_root(dataset)
         layout = dataset_layout(root)
         if layout in {'MUST', 'vitaldb'}:
-            signals, demographics, targets = _load_labels_rawdata_waveform_dataset(
+            signals, demographics, targets, groups = _load_labels_rawdata_waveform_dataset(
                 root / 'Labels',
                 root / 'RawData',
                 layout,
@@ -337,18 +339,21 @@ def load_waveform_dataset(
                 max_samples=max_samples,
             )
         else:
-            signals, demographics, targets = _load_southwest_waveform_dataset(
+            signals, demographics, targets, groups = _load_southwest_waveform_dataset(
                 root,
                 signal_length=signal_length,
                 include_basic=include_basic,
                 resample=resample,
             )
 
-    targets, signals, demographics = exclude_target_outlier_arrays(
+    targets, signals, demographics, groups = exclude_target_outlier_arrays(
         targets,
         signals,
         demographics,
+        groups,
     )
+    if return_groups:
+        return signals, demographics, targets, groups
     return signals, demographics, targets
 
 
@@ -360,7 +365,7 @@ def _load_labels_rawdata_waveform_dataset(
     include_basic: bool = True,
     resample: bool = False,
     max_samples: int | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     label_files = sorted(labels_dir.glob('label_*.csv'))
     if not label_files:
         raise RuntimeError(f'No label files found in {labels_dir}')
@@ -417,7 +422,7 @@ def _load_labels_rawdata_waveform_dataset(
             print('Skipping', label_path.name, 'because signal is empty')
             continue
 
-        pending.append((waveform, basic_values, target))
+        pending.append((waveform, basic_values, target, int(subject_id)))
         lengths.append(int(waveform.size))
 
     if not pending:
@@ -429,15 +434,18 @@ def _load_labels_rawdata_waveform_dataset(
     signals = []
     demographics = []
     targets = []
-    for waveform, basic_values, target in pending:
+    groups = []
+    for waveform, basic_values, target, subject_id in pending:
         signals.append(_resize_waveform(waveform, target_length, resample=resample))
         demographics.append(basic_values)
         targets.append(target)
+        groups.append(subject_id)
 
     return (
         np.stack(signals, axis=0),
         np.stack(demographics, axis=0),
         np.asarray(targets, dtype=np.float32),
+        np.asarray(groups),
     )
 
 
@@ -446,7 +454,7 @@ def _load_southwest_waveform_dataset(
     signal_length: int = 0,
     include_basic: bool = True,
     resample: bool = False,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     ppg_dir = root / 'ppg'
     metadata = pd.read_excel(root / 'bg_re.xlsx', sheet_name=0, header=1)
     pending = []
@@ -487,7 +495,7 @@ def _load_southwest_waveform_dataset(
             print('Skipping subject', subject_id_int, 'because signal is empty')
             continue
 
-        pending.append((waveform, basic_values, target))
+        pending.append((waveform, basic_values, target, subject_id_int))
         lengths.append(int(waveform.size))
 
     if not pending:
@@ -499,15 +507,18 @@ def _load_southwest_waveform_dataset(
     signals = []
     demographics = []
     targets = []
-    for waveform, basic_values, target in pending:
+    groups = []
+    for waveform, basic_values, target, subject_id in pending:
         signals.append(_resize_waveform(waveform, target_length, resample=resample))
         demographics.append(basic_values)
         targets.append(target)
+        groups.append(subject_id)
 
     return (
         np.stack(signals, axis=0),
         np.stack(demographics, axis=0),
         np.asarray(targets, dtype=np.float32),
+        np.asarray(groups),
     )
 
 

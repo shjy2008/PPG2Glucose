@@ -275,12 +275,13 @@ def main() -> None:
     device = torch.device('cpu') if args.quick else torch_device()
 
     print(f'Using dataset: {args.dataset}')
-    signals, demographics, targets = data_loader.load_waveform_dataset(
+    signals, demographics, targets, groups = data_loader.load_waveform_dataset(
         dataset=args.dataset,
         signal_length=args.signal_length,
         include_basic=args.include_basic,
         resample=True,
         max_samples=args.max_samples,
+        return_groups=True,
     )
     signals = normalize_signals_per_sample(signals)
     basic_mode = 'with basic info' if args.include_basic and demographics.size else 'PPG only'
@@ -288,6 +289,7 @@ def main() -> None:
         f'Training ResNet-34 on {device.type}: {len(targets)} samples, '
         f'signal length {signals.shape[1]} ({basic_mode})'
     )
+    print(f'Subject-wise CV: {len(np.unique(groups))} unique subjects')
 
     def predict_fold(
         train_index: np.ndarray,
@@ -311,6 +313,7 @@ def main() -> None:
         predict_fold,
         model_name='resnet34',
         n_splits=args.n_splits,
+        groups=groups,
     )
 
 

@@ -204,6 +204,7 @@ def run_repeated_kfold_array_cv(
     model_name: str = 'model',
     n_splits: int = 5,
     seeds: Optional[Sequence[int]] = None,
+    groups: Optional[np.ndarray] = None,
     print_target_distribution: bool = True,
     verbose: bool = True,
 ) -> Tuple[list[dict], pd.DataFrame, np.ndarray]:
@@ -222,6 +223,7 @@ def run_repeated_kfold_array_cv(
         [model_name],
         n_splits=n_splits,
         seeds=seeds,
+        groups=groups,
         verbose=verbose,
     )
     fold_metrics_by_model, summary_df, oof_predictions = evaluation.report_cv(
