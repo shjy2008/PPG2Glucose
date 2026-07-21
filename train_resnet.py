@@ -43,6 +43,17 @@ def apply_quick_settings(args) -> None:
     args.signal_length = 512
 
 
+def set_seed(seed: int) -> None:
+    """Make CPU and CUDA training as reproducible as possible."""
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        # Prefer deterministic cuDNN algorithms; disable auto-tuner.
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
+
 def normalize_signals_per_sample(signals: np.ndarray) -> np.ndarray:
     mean = signals.mean(axis=1, keepdims=True)
     std = signals.std(axis=1, keepdims=True)
@@ -100,6 +111,7 @@ def make_loader(
     batch_size: int,
     shuffle: bool,
     include_basic: bool,
+    seed: Optional[int] = None,
 ) -> DataLoader:
     # torch.tensor avoids torch.from_numpy, which breaks under NumPy 2.x + older PyTorch.
     tensors = [torch_float_tensor(signals[:, None, :])]
@@ -107,7 +119,16 @@ def make_loader(
         tensors.append(torch_float_tensor(demographics))
     if targets is not None:
         tensors.append(torch_float_tensor(targets))
-    return DataLoader(TensorDataset(*tensors), batch_size=batch_size, shuffle=shuffle)
+    generator = None
+    if shuffle and seed is not None:
+        generator = torch.Generator()
+        generator.manual_seed(seed)
+    return DataLoader(
+        TensorDataset(*tensors),
+        batch_size=batch_size,
+        shuffle=shuffle,
+        generator=generator,
+    )
 
 
 def unpack_batch(batch, include_basic: bool, device: torch.device, with_target: bool):
@@ -282,6 +303,7 @@ def run_fold(
         args.batch_size,
         True,
         use_basic,
+        seed=seed,
     )
     val_loader = make_loader(
         val_signals,
@@ -318,8 +340,7 @@ def main() -> None:
     if args.quick:
         apply_quick_settings(args)
 
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
+    set_seed(args.seed)
     device = torch.device('cpu') if args.quick else torch_device()
 
     print(f'Using dataset: {args.dataset}')
@@ -344,8 +365,7 @@ def main() -> None:
         test_index: np.ndarray,
         seed: int,
     ) -> np.ndarray:
-        torch.manual_seed(seed)
-        np.random.seed(seed)
+        set_seed(seed)
         return run_fold(
             signals,
             demographics,
