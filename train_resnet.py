@@ -5,6 +5,7 @@ import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
+from sklearn.model_selection import GroupShuffleSplit
 
 import data_loader
 import utils
@@ -203,29 +204,76 @@ def predict(
     return (normalized * target_std + target_mean).astype(np.float32, copy=False)
 
 
+def split_train_val(
+    train_index: np.ndarray,
+    groups: Optional[np.ndarray],
+    val_fraction: float,
+    seed: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Carve an inner validation set out of the training pool.
+
+    Subject-wise when groups are available so no subject_ID leaks between the
+    inner train and inner validation sets. With a 5-fold outer CV the test fold
+    is 20% of the data; val_fraction=0.25 makes validation 25% of the remaining
+    80% pool = 20% overall, leaving 60% for training (60/20/20 split).
+    """
+    if groups is not None:
+        splitter = GroupShuffleSplit(n_splits=1, test_size=val_fraction, random_state=seed)
+        inner_train, inner_val = next(
+            splitter.split(train_index, groups=groups[train_index])
+        )
+        return train_index[inner_train], train_index[inner_val]
+
+    shuffled = train_index.copy()
+    np.random.RandomState(seed).shuffle(shuffled)
+    n_val = max(1, int(round(len(shuffled) * val_fraction)))
+    return shuffled[n_val:], shuffled[:n_val]
+
+
 def run_fold(
     signals: np.ndarray,
     demographics: np.ndarray,
     targets: np.ndarray,
     train_index: np.ndarray,
-    val_index: np.ndarray,
+    test_index: np.ndarray,
     args,
     device: torch.device,
+    groups: Optional[np.ndarray],
+    seed: int,
 ) -> np.ndarray:
-    train_signals, val_signals = signals[train_index], signals[val_index]
-    y_train, y_val = targets[train_index], targets[val_index]
+    # 60/20/20: outer fold gives the 20% test set; split the 80% pool into
+    # inner-train (60% overall) and inner-val (20% overall) for early stopping.
+    inner_train_index, inner_val_index = split_train_val(
+        train_index,
+        groups,
+        val_fraction=0.25,
+        seed=seed,
+    )
+
+    train_signals = signals[inner_train_index]
+    val_signals = signals[inner_val_index]
+    test_signals = signals[test_index]
+
+    y_train = targets[inner_train_index]
+    y_val = targets[inner_val_index]
     y_train, target_mean, target_std = normalize_targets(y_train)
     y_val = ((y_val - target_mean) / target_std).astype(np.float32, copy=False)
 
     use_basic = args.include_basic and demographics.size > 0
     if use_basic:
+        # Standardize val and test with train-fold statistics only.
         train_demographics, val_demographics = standardize_train_test(
-            demographics[train_index],
-            demographics[val_index],
+            demographics[inner_train_index],
+            demographics[inner_val_index],
+        )
+        _, test_demographics = standardize_train_test(
+            demographics[inner_train_index],
+            demographics[test_index],
         )
     else:
-        train_demographics = np.empty((len(train_index), 0), dtype=np.float32)
-        val_demographics = np.empty((len(val_index), 0), dtype=np.float32)
+        train_demographics = np.empty((len(inner_train_index), 0), dtype=np.float32)
+        val_demographics = np.empty((len(inner_val_index), 0), dtype=np.float32)
+        test_demographics = np.empty((len(test_index), 0), dtype=np.float32)
 
     train_loader = make_loader(
         train_signals,
@@ -244,8 +292,8 @@ def run_fold(
         use_basic,
     )
     prediction_loader = make_loader(
-        val_signals,
-        val_demographics,
+        test_signals,
+        test_demographics,
         None,
         args.batch_size,
         False,
@@ -293,7 +341,7 @@ def main() -> None:
 
     def predict_fold(
         train_index: np.ndarray,
-        val_index: np.ndarray,
+        test_index: np.ndarray,
         seed: int,
     ) -> np.ndarray:
         torch.manual_seed(seed)
@@ -303,9 +351,11 @@ def main() -> None:
             demographics,
             targets,
             train_index,
-            val_index,
+            test_index,
             args,
             device,
+            groups,
+            seed,
         )
 
     utils.run_repeated_kfold_array_cv(
