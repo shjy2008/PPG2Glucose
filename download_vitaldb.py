@@ -7,6 +7,8 @@ the same Labels/ + RawData/ layout as MUST so existing training scripts can
 consume the dataset with ``--dataset vitaldb``.
 """
 
+# python download_vitaldb.py   --output-dir dataset/vitaldb_16min   --window-seconds 960
+
 from __future__ import annotations
 
 import argparse
@@ -24,6 +26,7 @@ import pandas as pd
 VITALDB_API = 'https://api.vitaldb.net'
 PPG_TRACK = 'SNUADC/PLETH'
 SOURCE_FS = 500.0
+COMPLETED_CASES_FILE = 'completed_cases.json'
 _INTERRUPTED = False
 
 
@@ -61,22 +64,6 @@ def _load_pleth_waveform(tid: str) -> np.ndarray:
 
 def _seconds_to_sample_index(dt_seconds: float) -> int:
     return int(round(float(dt_seconds) * SOURCE_FS))
-
-
-# def _downsample(signal: np.ndarray, source_fs: float, target_fs: float) -> np.ndarray:
-#     if target_fs <= 0 or source_fs <= 0:
-#         raise ValueError('sampling rates must be positive')
-#     if abs(source_fs - target_fs) < 1e-6:
-#         return signal.astype(np.float32, copy=False)
-
-#     target_length = max(1, int(round(signal.size * target_fs / source_fs)))
-#     try:
-#         from scipy.signal import resample
-
-#         return resample(signal, target_length).astype(np.float32)
-#     except Exception:
-#         factor = max(1, int(round(source_fs / target_fs)))
-#         return signal[::factor].astype(np.float32)
 
 
 def _extract_window(
@@ -156,36 +143,84 @@ def _sample_paths(output_dir: Path, caseid: int, sample_idx: int) -> tuple[Path,
     return label_path, signal_path
 
 
-def _sample_exists(output_dir: Path, caseid: int, sample_idx: int) -> bool:
-    label_path, signal_path = _sample_paths(output_dir, caseid, sample_idx)
-    return label_path.exists() and signal_path.exists()
+def _parse_sample_stem(stem: str, prefix: str) -> tuple[int, int] | None:
+    parts = stem.removeprefix(prefix).split('_', 1)
+    if len(parts) != 2:
+        return None
+    try:
+        return int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
 
 
-def _latest_existing_sample(output_dir: Path) -> tuple[int, int] | None:
-    latest: tuple[int, int] | None = None
-    for label_path in (output_dir / 'Labels').glob('label_*.csv'):
-        parts = label_path.stem.removeprefix('label_').split('_', 1)
-        if len(parts) != 2:
-            continue
-        try:
-            caseid = int(parts[0])
-            sample_idx = int(parts[1])
-        except ValueError:
-            continue
-        if not _sample_exists(output_dir, caseid, sample_idx):
-            continue
-        key = (caseid, sample_idx)
-        if latest is None or key > latest:
-            latest = key
-    return latest
+def _index_existing_samples(output_dir: Path) -> set[tuple[int, int]]:
+    """One filesystem scan; membership checks are O(1) afterwards."""
+    labels: set[tuple[int, int]] = set()
+    for path in (output_dir / 'Labels').glob('label_*.csv'):
+        key = _parse_sample_stem(path.stem, 'label_')
+        if key is not None:
+            labels.add(key)
+
+    existing: set[tuple[int, int]] = set()
+    for path in (output_dir / 'RawData').glob('signal_*.csv'):
+        key = _parse_sample_stem(path.stem, 'signal_')
+        if key is not None and key in labels:
+            existing.add(key)
+    return existing
 
 
-def _filtered_sample_indices(
+def _completed_cases_path(output_dir: Path) -> Path:
+    return output_dir / COMPLETED_CASES_FILE
+
+
+def _load_completed_cases(output_dir: Path, window_seconds: float) -> set[int]:
+    path = _completed_cases_path(output_dir)
+    if not path.exists():
+        return set()
+    try:
+        data = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return set()
+    if abs(float(data.get('window_seconds', -1)) - window_seconds) > 1e-6:
+        return set()
+    return {int(x) for x in data.get('case_ids', [])}
+
+
+def _save_completed_cases(
+    output_dir: Path,
+    completed_case_ids: set[int],
+    window_seconds: float,
+) -> None:
+    payload = {
+        'window_seconds': window_seconds,
+        'case_ids': sorted(completed_case_ids),
+    }
+    _completed_cases_path(output_dir).write_text(json.dumps(payload) + '\n')
+
+
+def _case_duration_seconds(clinical_row: pd.Series) -> float | None:
+    caseend = clinical_row.get('caseend')
+    if caseend is None or pd.isna(caseend):
+        return None
+    duration = float(caseend)
+    return duration if duration > 0 else None
+
+
+def _window_fits_case(dt_seconds: float, window_seconds: float, case_duration: float | None) -> bool:
+    half = window_seconds / 2.0
+    if float(dt_seconds) < half:
+        return False
+    if case_duration is not None and float(dt_seconds) + half > case_duration:
+        return False
+    return True
+
+
+def _filtered_labs(
     case_labs: pd.DataFrame,
     min_glucose_mg_dl: float | None,
     max_glucose_mg_dl: float | None,
-) -> list[int]:
-    indices: list[int] = []
+) -> list[tuple[int, pd.Series]]:
+    rows: list[tuple[int, pd.Series]] = []
     for sample_idx, (_, lab_row) in enumerate(case_labs.iterrows(), start=1):
         glucose = float(lab_row['result'])
         if not np.isfinite(glucose):
@@ -194,8 +229,8 @@ def _filtered_sample_indices(
             continue
         if max_glucose_mg_dl is not None and glucose > max_glucose_mg_dl:
             continue
-        indices.append(sample_idx)
-    return indices
+        rows.append((sample_idx, lab_row))
+    return rows
 
 
 def download_vitaldb(
@@ -235,15 +270,21 @@ def download_vitaldb(
             path.unlink()
         for path in raw_dir.glob('signal_*.csv'):
             path.unlink()
+        completed_path = _completed_cases_path(output_dir)
+        if completed_path.exists():
+            completed_path.unlink()
+        existing_samples: set[tuple[int, int]] = set()
+        completed_case_ids: set[int] = set()
         print('Overwrite mode: cleared existing label/signal files before download')
-        resume_cursor = None
     else:
-        resume_cursor = _latest_existing_sample(output_dir)
-        print('Resume mode: keeping existing files and skipping already downloaded samples')
-        if resume_cursor is not None:
-            print(
-                f'Resume cursor: starting from case {resume_cursor[0]} sample {resume_cursor[1] + 1}'
-            )
+        print('Indexing existing samples for fast resume...')
+        existing_samples = _index_existing_samples(output_dir)
+        completed_case_ids = _load_completed_cases(output_dir, window_seconds)
+        print(
+            f'Resume mode: {len(existing_samples)} sample(s) on disk, '
+            f'{len(completed_case_ids)} completed case(s); '
+            f'starting from case 0 and skipping as needed'
+        )
 
     cases = _load_cases()
     tracks = _load_tracks()
@@ -259,12 +300,26 @@ def download_vitaldb(
     if max_cases is not None:
         case_ids = case_ids[:max_cases]
 
+    cases_by_id = cases.set_index('caseid', drop=False)
+
     samples_written = 0
     cases_written = 0
     skipped_cases = 0
     samples_skipped_existing = 0
     cases_skipped_existing = 0
+    cases_skipped_complete = 0
     interrupted = False
+    completed_dirty = 0
+
+    def _mark_case_complete(caseid: int, *, flush: bool = False) -> None:
+        nonlocal completed_dirty
+        if caseid in completed_case_ids:
+            return
+        completed_case_ids.add(caseid)
+        completed_dirty += 1
+        if flush or completed_dirty >= 50:
+            _save_completed_cases(output_dir, completed_case_ids, window_seconds)
+            completed_dirty = 0
 
     try:
         for caseid in case_ids:
@@ -275,33 +330,60 @@ def download_vitaldb(
             if max_samples is not None and samples_written >= max_samples:
                 break
 
-            if resume_cursor is not None and caseid < resume_cursor[0]:
+            case_labs = grouped.get_group(caseid)
+            filtered = _filtered_labs(case_labs, min_glucose_mg_dl, max_glucose_mg_dl)
+            if not filtered:
+                _mark_case_complete(caseid)
                 continue
 
-            case_labs = grouped.get_group(caseid)
-            filtered_indices = _filtered_sample_indices(case_labs, min_glucose_mg_dl, max_glucose_mg_dl)
+            existing_for_case = [
+                sample_idx for sample_idx, _ in filtered
+                if (caseid, sample_idx) in existing_samples
+            ]
+            missing = [
+                (sample_idx, lab_row) for sample_idx, lab_row in filtered
+                if (caseid, sample_idx) not in existing_samples
+            ]
 
-            if not overwrite and filtered_indices:
-                if all(_sample_exists(output_dir, caseid, sample_idx) for sample_idx in filtered_indices):
-                    samples_skipped_existing += len(filtered_indices)
-                    cases_skipped_existing += 1
-                    print(
-                        f'Skipping case {caseid}: all {len(filtered_indices)} filtered sample(s) already exist'
-                    )
-                    continue
+            if caseid not in cases_by_id.index:
+                skipped_cases += 1
+                print(f'Skipping case {caseid}: no clinical row')
+                _mark_case_complete(caseid, flush=True)
+                continue
+            clinical_row = cases_by_id.loc[caseid]
+            if isinstance(clinical_row, pd.DataFrame):
+                clinical_row = clinical_row.iloc[0]
+
+            if not missing:
+                samples_skipped_existing += len(existing_for_case)
+                cases_skipped_existing += 1
+                _mark_case_complete(caseid)
+                continue
+
+            if caseid in completed_case_ids:
+                samples_skipped_existing += len(existing_for_case)
+                cases_skipped_complete += 1
+                continue
+
+            case_duration = _case_duration_seconds(clinical_row)
+            candidates = [
+                (sample_idx, lab_row) for sample_idx, lab_row in missing
+                if _window_fits_case(float(lab_row['dt']), window_seconds, case_duration)
+            ]
+            if not candidates:
+                # Remaining labs cannot fit this window; no PPG download needed.
+                samples_skipped_existing += len(existing_for_case)
+                _mark_case_complete(caseid)
+                if not existing_for_case:
+                    skipped_cases += 1
+                continue
 
             tid = _pleth_tid(tracks, caseid)
             if tid is None:
                 skipped_cases += 1
                 print(f'Skipping case {caseid}: no PPG track')
+                _mark_case_complete(caseid, flush=True)
                 continue
-
-            clinical_rows = cases[cases['caseid'] == caseid]
-            if clinical_rows.empty:
-                skipped_cases += 1
-                print(f'Skipping case {caseid}: no clinical row')
-                continue
-            clinical_row = clinical_rows.iloc[0]
 
             try:
                 pleth = _load_pleth_waveform(tid)
@@ -319,8 +401,7 @@ def download_vitaldb(
                 break
 
             case_samples = 0
-            case_existing_skipped = 0
-            for sample_idx, (_, lab_row) in enumerate(case_labs.iterrows(), start=1):
+            for sample_idx, lab_row in candidates:
                 if _INTERRUPTED:
                     interrupted = True
                     break
@@ -328,33 +409,12 @@ def download_vitaldb(
                 if max_samples is not None and samples_written >= max_samples:
                     break
 
-                if (
-                    resume_cursor is not None
-                    and caseid == resume_cursor[0]
-                    and sample_idx <= resume_cursor[1]
-                ):
-                    continue
-
                 glucose = float(lab_row['result'])
-                if not np.isfinite(glucose):
-                    continue
-                if min_glucose_mg_dl is not None and glucose < min_glucose_mg_dl:
-                    continue
-                if max_glucose_mg_dl is not None and glucose > max_glucose_mg_dl:
-                    continue
-
-                if not overwrite and _sample_exists(output_dir, caseid, sample_idx):
-                    samples_skipped_existing += 1
-                    case_existing_skipped += 1
-                    continue
-
                 center = _seconds_to_sample_index(lab_row['dt'])
                 window = _extract_window(pleth, center, window_seconds)
                 if window is None:
                     continue
 
-                # Keep VitalDB raw here; downsampling is handled later in the shared preprocessing pipeline.
-                # window = _downsample(window, SOURCE_FS, target_fs)
                 _write_sample(
                     output_dir,
                     caseid=caseid,
@@ -363,21 +423,27 @@ def download_vitaldb(
                     ppg_window=window,
                     clinical_row=clinical_row,
                 )
+                existing_samples.add((caseid, sample_idx))
                 samples_written += 1
                 case_samples += 1
 
             if interrupted:
                 break
 
+            # Case fully attempted (wrote 0 or more); do not reload PPG next resume.
+            _mark_case_complete(caseid, flush=True)
+            samples_skipped_existing += len(existing_for_case)
+
             if case_samples:
                 cases_written += 1
                 print(f'Case {caseid}: wrote {case_samples} sample(s)')
-            elif case_existing_skipped:
-                print(f'Case {caseid}: all filtered samples already existed ({case_existing_skipped})')
-            else:
+            elif not existing_for_case:
+                skipped_cases += 1
                 print(f'Skipping case {caseid}: no usable glucose windows')
     finally:
         signal.signal(signal.SIGINT, old_sigint_handler)
+        if not overwrite:
+            _save_completed_cases(output_dir, completed_case_ids, window_seconds)
 
     manifest = {
         'dataset': 'vitaldb',
@@ -389,14 +455,17 @@ def download_vitaldb(
         'samples_written': samples_written,
         'skipped_cases': skipped_cases,
         'cases_skipped_existing': cases_skipped_existing,
+        'cases_skipped_complete': cases_skipped_complete,
         'samples_skipped_existing': samples_skipped_existing,
+        'completed_cases': len(completed_case_ids),
+        'existing_samples_on_disk': len(existing_samples),
         'overwrite': overwrite,
         'interrupted': interrupted,
         'glucose_unit': 'mg/dL',
     }
     (output_dir / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
 
-    if samples_written == 0 and samples_skipped_existing == 0 and not interrupted:
+    if samples_written == 0 and samples_skipped_existing == 0 and cases_skipped_complete == 0 and not interrupted:
         raise RuntimeError('No VitalDB samples were written. Check network access and filters.')
 
     if interrupted:
