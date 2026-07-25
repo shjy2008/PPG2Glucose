@@ -1,0 +1,25 @@
+# temp files
+__pycache__/
+catboost_info/
+feature_cache/
+.cache/
+
+# datasets
+dataset/vitaldb
+dataset/ieb
+dataset/MUST
+
+.vscode
+.DS_Store
+
+# outputs
+exports/
+results/
+clarke_error_grid.png
+seg_error_grid.png
+
+# documents
+papers/
+
+# public code
+TinyML_code/

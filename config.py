@@ -25,6 +25,16 @@ PPG_SAMPLING_RATE = {
 }
 DEFAULT_PPG_SAMPLING_RATE = 200
 
+# Optional rate-based downsample after filter (Hz). None keeps native PPG_SAMPLING_RATE.
+# Applied in shared PPG prep so feature extraction uses the reduced rate.
+# MUST downsample-only 2175→100 Hz raised MAE 0.7311 → 0.7633.
+PPG_TARGET_FS = {
+    'MUST': None,  # 100.0
+    'southwest': None,
+    'vitaldb': None,
+}
+DEFAULT_PPG_TARGET_FS = None
+
 # Hand-crafted PPG feature groups enabled per dataset.
 # g1=distribution, g2=derivatives, g3=pulse, g4=frequency,
 # g5=periodicity, g6=signal segments, g7=optional signal-quality indicators.
@@ -67,16 +77,6 @@ PPG_FILTER = {
     'vitaldb': 'none',
 }
 DEFAULT_PPG_FILTER = 'none'
-
-# Optional rate-based downsample after filter (Hz). None keeps native PPG_SAMPLING_RATE.
-# Applied in shared PPG prep so feature extraction uses the reduced rate.
-# MUST downsample-only 2175→100 Hz raised MAE 0.7311 → 0.7633.
-PPG_TARGET_FS = {
-    'MUST': None,  # 100.0
-    'southwest': None,
-    'vitaldb': None,
-}
-DEFAULT_PPG_TARGET_FS = None
 
 # Optional best-window selection before feature extraction.
 # A positive duration selects the overlapping window with the highest skewness SSQI.

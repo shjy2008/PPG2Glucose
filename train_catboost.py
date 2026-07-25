@@ -76,6 +76,11 @@ def build_parser():
         help='Keep top N features per fold (ranked on train split only)',
     )
     p.add_argument('--top', type=int, default=20, help='Number of top features to print')
+    p.add_argument(
+        '--refresh-cache',
+        action='store_true',
+        help='Re-extract PPG features and overwrite the feature cache',
+    )
     return p
 
 
@@ -116,6 +121,7 @@ def main():
         args.dataset,
         max_samples=args.max_samples,
         window_seconds=window_seconds,
+        refresh_cache=args.refresh_cache,
     )
     # Leakage if the same subject appears in train and val with multiple rows
     # (MUST/vitaldb sessions, or windowed PPG).

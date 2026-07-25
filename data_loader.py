@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -10,6 +12,7 @@ from utils import (
 )
 from config import (
     DEFAULT_WINDOW_SECONDS,
+    PPG_BEST_SEGMENT_HOP_SECONDS,
     PPG_SQA_WINDOW_SECONDS,
     basic_feature_keys,
     ppg_best_segment_seconds,
@@ -29,6 +32,57 @@ from data_ppg import (
 )
 # from data_ppg_basic import extract_raw_ppg, read_signal_waveform, extract_ppg_bpm  # performance worse than data_ppg
 from sklearn.model_selection import KFold
+
+FEATURE_CACHE_DIR = Path(__file__).resolve().parent / 'feature_cache'
+
+
+def _feature_cache_path(dataset_name: str, fingerprint: dict) -> Path:
+    key = hashlib.sha256(
+        json.dumps(fingerprint, sort_keys=True, default=str).encode()
+    ).hexdigest()[:12]
+    FEATURE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    return FEATURE_CACHE_DIR / f'{dataset_name}_{key}.pkl'
+
+
+def _ppg_cache_fingerprint(
+    dataset_name: str,
+    window_seconds: float,
+    max_samples: int | None,
+    identity: dict,
+) -> dict:
+    return {
+        'dataset': dataset_name,
+        'window_seconds': float(window_seconds or 0.0),
+        'max_samples': max_samples,
+        'basic_feature_keys': list(basic_feature_keys(dataset_name)),
+        'ppg_sampling_rate': ppg_sampling_rate(dataset_name),
+        'ppg_target_fs': ppg_target_fs(dataset_name),
+        'ppg_feature_groups': list(ppg_feature_groups(dataset_name)),
+        'ppg_trim_fractions': list(ppg_trim_fractions(dataset_name)),
+        'ppg_filter': ppg_filter(dataset_name),
+        'ppg_best_segment_seconds': ppg_best_segment_seconds(dataset_name),
+        'ppg_best_segment_hop_seconds': PPG_BEST_SEGMENT_HOP_SECONDS,
+        'ppg_sqa_threshold': ppg_sqa_threshold(dataset_name),
+        'ppg_sqa_window_seconds': PPG_SQA_WINDOW_SECONDS,
+        'identity': identity,
+    }
+
+
+def _try_load_feature_cache(cache_path: Path, refresh_cache: bool) -> pd.DataFrame | None:
+    if refresh_cache or not cache_path.is_file():
+        return None
+    df = pd.read_pickle(cache_path)
+    print(f'Loaded features from {cache_path.name} ({len(df)} rows)')
+    return df
+
+
+def _save_feature_cache(cache_path: Path, df: pd.DataFrame, fingerprint: dict) -> None:
+    df.to_pickle(cache_path)
+    cache_path.with_suffix('.meta.json').write_text(
+        json.dumps(fingerprint, indent=2, sort_keys=True, default=str),
+        encoding='utf-8',
+    )
+    print(f'Saved feature cache to {cache_path.name} ({len(df)} rows)')
 
 
 def _ppg_feature_dicts(
@@ -118,6 +172,7 @@ def load_dataset(
     raw_data_dir: Path | None = None,
     max_samples: int | None = None,
     window_seconds: float = DEFAULT_WINDOW_SECONDS,
+    refresh_cache: bool = False,
 ) -> pd.DataFrame:
     if labels_dir is not None or raw_data_dir is not None:
         if labels_dir is None or raw_data_dir is None:
@@ -129,6 +184,7 @@ def load_dataset(
             layout,
             max_samples=max_samples,
             window_seconds=window_seconds,
+            refresh_cache=refresh_cache,
         )
 
     root = resolve_dataset_root(dataset)
@@ -140,8 +196,14 @@ def load_dataset(
             layout,
             max_samples=max_samples,
             window_seconds=window_seconds,
+            refresh_cache=refresh_cache,
         )
-    return _load_southwest_dataset(root, window_seconds=window_seconds)
+    return _load_southwest_dataset(
+        root,
+        window_seconds=window_seconds,
+        max_samples=max_samples,
+        refresh_cache=refresh_cache,
+    )
 
 
 def _load_labels_rawdata_dataset(
@@ -150,10 +212,23 @@ def _load_labels_rawdata_dataset(
     dataset_name: str,
     max_samples: int | None = None,
     window_seconds: float = DEFAULT_WINDOW_SECONDS,
+    refresh_cache: bool = False,
 ) -> pd.DataFrame:
     label_files = sorted(labels_dir.glob('label_*.csv'))
     if not label_files:
         raise RuntimeError(f'No label files found in {labels_dir}')
+
+    identity = {
+        'n_label_files': len(label_files),
+        'max_label_mtime': round(max(p.stat().st_mtime for p in label_files), 3),
+        'raw_data_mtime': round(raw_data_dir.stat().st_mtime, 3),
+    }
+    fingerprint = _ppg_cache_fingerprint(dataset_name, window_seconds, max_samples, identity)
+    cache_path = _feature_cache_path(dataset_name, fingerprint)
+    cached = _try_load_feature_cache(cache_path, refresh_cache)
+    if cached is not None:
+        return cached
+
     if max_samples is not None:
         label_files = label_files[:max_samples]
         print(f'Limited to {len(label_files)} sample(s)')
@@ -225,17 +300,37 @@ def _load_labels_rawdata_dataset(
         )
 
     print(f'Finished loading: {len(dataset)} usable sample(s)', flush=True)
+    _save_feature_cache(cache_path, dataset, fingerprint)
     return dataset
 
 
 def _load_southwest_dataset(
     root: Path,
     window_seconds: float = DEFAULT_WINDOW_SECONDS,
+    max_samples: int | None = None,
+    refresh_cache: bool = False,
 ) -> pd.DataFrame:
     ppg_dir = root / 'ppg'
+    ppg_files = list(ppg_dir.glob('*.txt')) if ppg_dir.is_dir() else []
+    identity = {
+        'n_ppg_files': len(ppg_files),
+        'max_ppg_mtime': round(max((p.stat().st_mtime for p in ppg_files), default=0.0), 3),
+        'bg_re_mtime': round((root / 'bg_re.xlsx').stat().st_mtime, 3),
+    }
+    fingerprint = _ppg_cache_fingerprint('southwest', window_seconds, max_samples, identity)
+    cache_path = _feature_cache_path('southwest', fingerprint)
+    cached = _try_load_feature_cache(cache_path, refresh_cache)
+    if cached is not None:
+        return cached
+
     metadata = pd.read_excel(root / 'bg_re.xlsx', sheet_name=0, header=1)
+    rows = metadata[metadata['subject_ID'].notna()]
+    if max_samples is not None:
+        rows = rows.iloc[:max_samples]
+        print(f'Limited to {len(rows)} sample(s)')
+
     records = []
-    for _, row in metadata[metadata['subject_ID'].notna()].iterrows():
+    for _, row in rows.iterrows():
         subject_id = safe_float(row['subject_ID'])
         target = safe_float(row['Diabetes'])
         if np.isnan(subject_id) or np.isnan(target):
@@ -283,7 +378,9 @@ def _load_southwest_dataset(
         raise RuntimeError(
             f'No usable rows were found. Check bg_re.xlsx and matching {ppg_dir.name}/*.txt files.'
         )
-    return pd.DataFrame(records)
+    dataset = pd.DataFrame(records)
+    _save_feature_cache(cache_path, dataset, fingerprint)
+    return dataset
 
 
 def _resize_waveform(waveform: np.ndarray, target_length: int, resample: bool) -> np.ndarray:
