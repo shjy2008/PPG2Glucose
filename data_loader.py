@@ -36,6 +36,8 @@ from sklearn.model_selection import KFold
 
 FEATURE_CACHE_DIR = Path(__file__).resolve().parent / 'feature_cache'
 
+_DEMOGRAPHIC_COLUMNS = ('sex', 'age', 'height', 'weight', 'bmi')
+
 
 def _feature_cache_path(dataset_name: str, fingerprint: dict) -> Path:
     key = hashlib.sha256(
@@ -52,11 +54,11 @@ def _ppg_cache_fingerprint(
     identity: dict,
     center_window_seconds: float | None = None,
 ) -> dict:
+    # Demographics are not part of the PPG cache key; they are joined at load time.
     return {
         'dataset': dataset_name,
         'window_seconds': float(window_seconds or 0.0),
         'max_samples': max_samples,
-        'basic_feature_keys': list(basic_feature_keys(dataset_name)),
         'ppg_sampling_rate': ppg_sampling_rate(dataset_name),
         'ppg_target_fs': ppg_target_fs(dataset_name),
         'ppg_feature_groups': list(ppg_feature_groups(dataset_name)),
@@ -71,21 +73,134 @@ def _ppg_cache_fingerprint(
     }
 
 
-def _try_load_feature_cache(cache_path: Path, refresh_cache: bool) -> pd.DataFrame | None:
-    if refresh_cache or not cache_path.is_file():
+def _ppg_only_frame(df: pd.DataFrame) -> pd.DataFrame:
+    drop = [c for c in _DEMOGRAPHIC_COLUMNS if c in df.columns]
+    return df.drop(columns=drop) if drop else df
+
+
+def _fingerprint_without_demos(meta: dict) -> dict:
+    return {k: v for k, v in meta.items() if k != 'basic_feature_keys'}
+
+
+def _try_load_feature_cache(
+    cache_path: Path,
+    refresh_cache: bool,
+    fingerprint: dict | None = None,
+    dataset_name: str | None = None,
+) -> pd.DataFrame | None:
+    if refresh_cache:
         return None
-    df = pd.read_pickle(cache_path)
-    print(f'Loaded features from {cache_path.name} ({len(df)} rows)')
-    return df
+    if cache_path.is_file():
+        df = pd.read_pickle(cache_path)
+        print(f'Loaded PPG features from {cache_path.name} ({len(df)} rows)')
+        return _ppg_only_frame(df)
+
+    # Reuse older caches whose meta still listed basic_feature_keys.
+    if fingerprint is None or dataset_name is None or not FEATURE_CACHE_DIR.is_dir():
+        return None
+    want = _fingerprint_without_demos(fingerprint)
+    for meta_path in FEATURE_CACHE_DIR.glob(f'{dataset_name}_*.meta.json'):
+        try:
+            meta = json.loads(meta_path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if _fingerprint_without_demos(meta) != want:
+            continue
+        pkl_path = meta_path.with_name(meta_path.name.removesuffix('.meta.json') + '.pkl')
+        if not pkl_path.is_file():
+            continue
+        df = pd.read_pickle(pkl_path)
+        print(f'Loaded PPG features from legacy {pkl_path.name} ({len(df)} rows)')
+        return _ppg_only_frame(df)
+    return None
 
 
 def _save_feature_cache(cache_path: Path, df: pd.DataFrame, fingerprint: dict) -> None:
-    df.to_pickle(cache_path)
+    ppg_df = _ppg_only_frame(df)
+    ppg_df.to_pickle(cache_path)
     cache_path.with_suffix('.meta.json').write_text(
         json.dumps(fingerprint, indent=2, sort_keys=True, default=str),
         encoding='utf-8',
     )
-    print(f'Saved feature cache to {cache_path.name} ({len(df)} rows)')
+    print(f'Saved PPG feature cache to {cache_path.name} ({len(ppg_df)} rows)')
+
+
+def _attach_labels_rawdata_basic(
+    df: pd.DataFrame,
+    labels_dir: Path,
+    dataset_name: str,
+) -> pd.DataFrame:
+    out = _ppg_only_frame(df)
+    keys = basic_feature_keys(dataset_name)
+    if not keys:
+        return out.reset_index(drop=True)
+
+    demo_records = []
+    for label_path in labels_dir.glob('label_*.csv'):
+        try:
+            _, session_key = _parse_label_stem(label_path)
+        except ValueError:
+            continue
+        label_df = pd.read_csv(label_path)
+        if label_df.empty:
+            continue
+        row = label_df.iloc[0]
+        subject_id = safe_float(row['ID'])
+        if np.isnan(subject_id):
+            continue
+        info = extract_basic_info(row, keys)
+        if info:
+            demo_records.append(
+                {'subject_ID': int(subject_id), 'session_ID': str(session_key), **info}
+            )
+    if not demo_records:
+        raise RuntimeError(f'No usable demographics {list(keys)} under {labels_dir}')
+    merged = out.assign(session_ID=out['session_ID'].astype(str)).merge(
+        pd.DataFrame(demo_records), on=['subject_ID', 'session_ID'], how='inner'
+    )
+    dropped = len(out) - len(merged)
+    if dropped:
+        print(f'Dropped {dropped} row(s) missing demographics {list(keys)}')
+    if merged.empty:
+        raise RuntimeError(f'All rows dropped attaching demographics {list(keys)}')
+    # Keep historical column order: IDs/target, then demos, then PPG features.
+    id_cols = [
+        c for c in ('subject_ID', 'session_ID', 'window_ID', 'target') if c in merged.columns
+    ]
+    ppg_cols = [c for c in out.columns if c not in id_cols]
+    return merged.loc[:, id_cols + list(keys) + ppg_cols].reset_index(drop=True)
+
+
+def _attach_southwest_basic(df: pd.DataFrame, root: Path) -> pd.DataFrame:
+    out = _ppg_only_frame(df)
+    keys = basic_feature_keys('southwest')
+    if not keys:
+        return out.reset_index(drop=True)
+
+    metadata = pd.read_excel(root / 'bg_re.xlsx', sheet_name=0, header=1)
+    demo_records = []
+    for _, row in metadata[metadata['subject_ID'].notna()].iterrows():
+        subject_id = safe_float(row['subject_ID'])
+        if np.isnan(subject_id):
+            continue
+        info = extract_basic_info(row, keys)
+        if info:
+            demo_records.append({'subject_ID': int(subject_id), **info})
+    if not demo_records:
+        raise RuntimeError(f'No usable demographics {list(keys)} in {root / "bg_re.xlsx"}')
+    merged = out.merge(
+        pd.DataFrame(demo_records).drop_duplicates('subject_ID'),
+        on='subject_ID',
+        how='inner',
+    )
+    dropped = len(out) - len(merged)
+    if dropped:
+        print(f'Dropped {dropped} row(s) missing demographics {list(keys)}')
+    if merged.empty:
+        raise RuntimeError(f'All rows dropped attaching demographics {list(keys)}')
+    id_cols = [c for c in ('subject_ID', 'window_ID', 'target') if c in merged.columns]
+    ppg_cols = [c for c in out.columns if c not in id_cols]
+    return merged.loc[:, id_cols + list(keys) + ppg_cols].reset_index(drop=True)
 
 
 def _ppg_feature_dicts(
@@ -260,9 +375,11 @@ def _load_labels_rawdata_dataset(
         center_window_seconds=center_seconds,
     )
     cache_path = _feature_cache_path(dataset_name, fingerprint)
-    cached = _try_load_feature_cache(cache_path, refresh_cache)
+    cached = _try_load_feature_cache(
+        cache_path, refresh_cache, fingerprint=fingerprint, dataset_name=dataset_name
+    )
     if cached is not None:
-        return cached
+        return _attach_labels_rawdata_basic(cached, labels_dir, dataset_name)
 
     if max_samples is not None:
         label_files = label_files[:max_samples]
@@ -298,11 +415,6 @@ def _load_labels_rawdata_dataset(
 
         subject_id_int = int(subject_id)
 
-        keys = basic_feature_keys(dataset_name)
-        basic_info_dict = extract_basic_info(row, keys)
-        if keys and not basic_info_dict:
-            continue
-
         signal_path = _signal_path(raw_data_dir, subject_key, session_key)
         if not signal_path.exists():
             print('Skipping', label_path.name, 'because signal file does not exist:', signal_path.name)
@@ -326,7 +438,6 @@ def _load_labels_rawdata_dataset(
             }
             if window_seconds is not None and window_seconds > 0:
                 record['window_ID'] = window_id
-            record.update(basic_info_dict)
             record.update(raw_ppg_dict)
             records.append(record)
 
@@ -339,9 +450,9 @@ def _load_labels_rawdata_dataset(
             'No usable rows were found. Check Labels/*.csv and matching RawData/signal_*.csv files.'
         )
 
-    print(f'Finished loading: {len(dataset)} usable sample(s)', flush=True)
+    print(f'Finished PPG extraction: {len(dataset)} usable sample(s)', flush=True)
     _save_feature_cache(cache_path, dataset, fingerprint)
-    return dataset
+    return _attach_labels_rawdata_basic(dataset, labels_dir, dataset_name)
 
 
 def _load_southwest_dataset(
@@ -367,9 +478,11 @@ def _load_southwest_dataset(
         center_window_seconds=center_seconds,
     )
     cache_path = _feature_cache_path('southwest', fingerprint)
-    cached = _try_load_feature_cache(cache_path, refresh_cache)
+    cached = _try_load_feature_cache(
+        cache_path, refresh_cache, fingerprint=fingerprint, dataset_name='southwest'
+    )
     if cached is not None:
-        return cached
+        return _attach_southwest_basic(cached, root)
 
     metadata = pd.read_excel(root / 'bg_re.xlsx', sheet_name=0, header=1)
     rows = metadata[metadata['subject_ID'].notna()]
@@ -388,11 +501,6 @@ def _load_southwest_dataset(
         target = safe_float(row['Diabetes'])
         if np.isnan(subject_id) or np.isnan(target):
             print('Skipping subject', row['subject_ID'], 'with invalid ID or target', target)
-            continue
-
-        keys = basic_feature_keys('southwest')
-        basic_info_dict = extract_basic_info(row, keys)
-        if keys and not basic_info_dict:
             continue
 
         subject_id_int = int(subject_id)
@@ -419,7 +527,6 @@ def _load_southwest_dataset(
             }
             if window_seconds is not None and window_seconds > 0:
                 record['window_ID'] = window_id
-            record.update(basic_info_dict)
             record.update(raw_ppg_dict)
             # PPG_BPM is not useful, including it cause worse performance (tested through 210 subjects with ppg_bpm)
             # ppg_bpm = extract_ppg_bpm(row)
@@ -434,7 +541,7 @@ def _load_southwest_dataset(
         )
     dataset = pd.DataFrame(records)
     _save_feature_cache(cache_path, dataset, fingerprint)
-    return dataset
+    return _attach_southwest_basic(dataset, root)
 
 
 def _resize_waveform(waveform: np.ndarray, target_length: int, resample: bool) -> np.ndarray:
