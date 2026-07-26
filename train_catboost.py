@@ -69,6 +69,12 @@ def build_parser():
              '(auto-enabled when any subject has multiple samples, e.g. MUST or windowed PPG)',
     )
     p.add_argument(
+        '--sample-wise',
+        action='store_true',
+        help='Force random KFold over rows (ignore subject_ID). Useful to reproduce '
+             'leaky segment-level splits; overrides auto subject-wise CV.',
+    )
+    p.add_argument(
         '--select-top',
         type=int,
         default=None,
@@ -128,7 +134,9 @@ def main():
     multi_sample_subjects = (
         'subject_ID' in ds.columns and ds.groupby('subject_ID').size().max() > 1
     )
-    subject_wise = args.subject_wise or multi_sample_subjects
+    if args.sample_wise and args.subject_wise:
+        raise SystemExit('Use only one of --sample-wise or --subject-wise')
+    subject_wise = (not args.sample_wise) and (args.subject_wise or multi_sample_subjects)
     print(
         f"Using dataset: {args.dataset} "
         f"(window_seconds={window_seconds}, ppg_filter={ppg_filter(args.dataset)}, "
@@ -148,6 +156,11 @@ def main():
     else:
         X, y, feature_names = data_loader.split(ds)
         groups = None
+        if args.sample_wise:
+            print(
+                f"Sample-wise CV (KFold over rows; subject leakage allowed): "
+                f"{len(y)} samples"
+            )
     print(
         f"Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}, "
         f"features: {X.shape[1]}"

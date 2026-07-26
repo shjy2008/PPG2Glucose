@@ -9,7 +9,15 @@ from sklearn.model_selection import GroupShuffleSplit
 
 import data_loader
 import utils
-from config import tensor_to_numpy, torch_device, torch_float_tensor
+from config import (
+    DEFAULT_WINDOW_SECONDS,
+    ppg_sampling_rate,
+    ppg_target_fs,
+    tensor_to_numpy,
+    torch_device,
+    torch_float_tensor,
+)
+from data_ppg import effective_sampling_rate, segment_signal
 from TinyML_code.resnet import resnet34
 
 
@@ -25,6 +33,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--weight-decay', type=float, default=1e-4)
     parser.add_argument('--patience', type=int, default=5, help='Early stopping patience')
     parser.add_argument('--signal-length', type=int, default=2048, help='0 = median waveform length')
+    parser.add_argument(
+        '--window-seconds',
+        type=float,
+        default=None,
+        help='Chop each PPG into non-overlapping windows (same glucose label per window). '
+             f'Default: config.DEFAULT_WINDOW_SECONDS ({DEFAULT_WINDOW_SECONDS}; 0=full)',
+    )
+    parser.add_argument(
+        '--sample-wise',
+        action='store_true',
+        help='Force random KFold over windows/rows (ignore subject_ID). Reproduces the '
+             'leaky segment-level split used by TinyML / Biosensors papers.',
+    )
     parser.add_argument('--include-basic', dest='include_basic', action='store_true')
     parser.add_argument('--no-basic', dest='include_basic', action='store_false')
     parser.add_argument(
@@ -59,6 +80,56 @@ def normalize_signals_per_sample(signals: np.ndarray) -> np.ndarray:
     std = signals.std(axis=1, keepdims=True)
     std = np.where(std == 0, 1.0, std)
     return ((signals - mean) / std).astype(np.float32, copy=False)
+
+
+def expand_waveform_windows(
+    signals: np.ndarray,
+    demographics: np.ndarray,
+    targets: np.ndarray,
+    groups: np.ndarray,
+    *,
+    dataset: str,
+    window_seconds: float,
+    signal_length: int,
+    resample: bool = True,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Chop each native waveform into windows that share the same glucose label.
+
+    Mimics TinyML / Biosensors: many segments per lab draw, identical BGL label.
+    """
+    fs = effective_sampling_rate(ppg_sampling_rate(dataset), ppg_target_fs(dataset))
+    windowed_signals = []
+    windowed_demographics = []
+    windowed_targets = []
+    windowed_groups = []
+    for index in range(len(targets)):
+        windows = segment_signal(signals[index], fs=fs, window_seconds=window_seconds)
+        if not windows:
+            continue
+        demo = demographics[index]
+        target = targets[index]
+        group = groups[index]
+        for window in windows:
+            resized = data_loader._resize_waveform(
+                np.asarray(window, dtype=np.float32),
+                signal_length,
+                resample=resample,
+            )
+            windowed_signals.append(resized)
+            windowed_demographics.append(demo)
+            windowed_targets.append(target)
+            windowed_groups.append(group)
+
+    if not windowed_signals:
+        raise RuntimeError(
+            f'No windows produced with window_seconds={window_seconds} at fs={fs}'
+        )
+    return (
+        np.stack(windowed_signals, axis=0),
+        np.stack(windowed_demographics, axis=0),
+        np.asarray(windowed_targets, dtype=np.float32),
+        np.asarray(windowed_groups),
+    )
 
 
 def standardize_train_test(
@@ -340,25 +411,56 @@ def main() -> None:
     if args.quick:
         apply_quick_settings(args)
 
+    window_seconds = (
+        DEFAULT_WINDOW_SECONDS if args.window_seconds is None else args.window_seconds
+    )
     set_seed(args.seed)
     device = torch.device('cpu') if args.quick else torch_device()
 
-    print(f'Using dataset: {args.dataset}')
+    print(f'Using dataset: {args.dataset} (window_seconds={window_seconds})')
+    # Load native-length waveforms when windowing so we can chop before resize.
+    load_length = 0 if window_seconds > 0 else args.signal_length
     signals, demographics, targets, groups = data_loader.load_waveform_dataset(
         dataset=args.dataset,
-        signal_length=args.signal_length,
+        signal_length=load_length,
         include_basic=args.include_basic,
         resample=True,
         max_samples=args.max_samples,
         return_groups=True,
     )
+    if window_seconds > 0:
+        n_labs = len(targets)
+        signals, demographics, targets, groups = expand_waveform_windows(
+            signals,
+            demographics,
+            targets,
+            groups,
+            dataset=args.dataset,
+            window_seconds=window_seconds,
+            signal_length=args.signal_length if args.signal_length > 0 else 1024,
+            resample=True,
+        )
+        print(
+            f'Windowed {n_labs} lab draws → {len(targets)} segments '
+            f'({window_seconds:g} s, shared glucose labels)'
+        )
     signals = normalize_signals_per_sample(signals)
     basic_mode = 'with basic info' if args.include_basic and demographics.size else 'PPG only'
     print(
         f'Training ResNet-34 on {device.type}: {len(targets)} samples, '
         f'signal length {signals.shape[1]} ({basic_mode})'
     )
-    print(f'Subject-wise CV: {len(np.unique(groups))} unique subjects')
+
+    # Paper-style leakage: random KFold over segments so sibling windows from the
+    # same subject/glucose can appear in both train and test.
+    cv_groups = None if args.sample_wise else groups
+    if args.sample_wise:
+        print(
+            f'Sample-wise CV (KFold over rows; subject leakage allowed): '
+            f'{len(targets)} samples across {len(np.unique(groups))} subjects'
+        )
+    else:
+        print(f'Subject-wise CV: {len(np.unique(groups))} unique subjects')
 
     def predict_fold(
         train_index: np.ndarray,
@@ -374,7 +476,7 @@ def main() -> None:
             test_index,
             args,
             device,
-            groups,
+            cv_groups,
             seed,
         )
 
@@ -383,7 +485,7 @@ def main() -> None:
         predict_fold,
         model_name='resnet34',
         n_splits=args.n_splits,
-        groups=groups,
+        groups=cv_groups,
     )
 
 
