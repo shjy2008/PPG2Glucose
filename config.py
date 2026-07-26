@@ -1,6 +1,32 @@
 """Global runtime settings."""
 
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
 USE_GPU = False
+
+# Named dataset roots. Edit paths per machine, or override with env vars.
+# --dataset vitaldb loads these 16 min files; crop with --ppg-seconds (default 60).
+_VITALDB_16MIN_ROOT = Path(
+    os.environ.get('VITALDB_16MIN_DIR', 'dataset/vitaldb_16min')
+)
+DATASET_ROOTS = {
+    'southwest': Path('dataset/southwest'),
+    'MUST': Path('dataset/MUST'),
+    'vitaldb': _VITALDB_16MIN_ROOT,
+}
+
+# Config profile used for PPG/demographics when the CLI name is an alias/path.
+DATASET_CONFIG_PROFILE = {
+    'southwest': 'southwest',
+    'MUST': 'MUST',
+    'vitaldb': 'vitaldb',
+}
+
+# Default --ppg-seconds when --dataset vitaldb and flag omitted. Other datasets: full signal.
+DEFAULT_VITALDB_PPG_SECONDS = 60.0
 
 # Per-dataset demographic features for tabular ML, CNN, LSTM, etc.
 # Options: (), ('age',), ('age', 'bmi'), ('age', 'height', 'weight'),
@@ -107,36 +133,86 @@ TARGET_OUTLIER_UPPER_Q = 1
 # TARGET_OUTLIER_UPPER_Q = 0.99
 
 
+def resolve_config_dataset(dataset: str | Path | None) -> str:
+    """Map CLI dataset name/path to a settings profile (vitaldb/MUST/southwest)."""
+    if dataset is None:
+        return 'southwest'
+    raw = str(dataset)
+    name = Path(raw).name
+    if raw in DATASET_CONFIG_PROFILE:
+        return DATASET_CONFIG_PROFILE[raw]
+    if name in DATASET_CONFIG_PROFILE:
+        return DATASET_CONFIG_PROFILE[name]
+
+    lower_name = name.lower()
+    lower_path = raw.replace('\\', '/').lower()
+    if lower_name.startswith('vitaldb') or '/vitaldb' in lower_path:
+        return 'vitaldb'
+    if lower_name == 'must' or '/must/' in f'/{lower_path}/':
+        return 'MUST'
+    if lower_name.startswith('southwest') or '/southwest' in lower_path:
+        return 'southwest'
+
+    root = Path(raw)
+    if not root.is_absolute():
+        root = Path(__file__).resolve().parent / root
+    if root.is_dir():
+        if (root / 'manifest.json').is_file() and (root / 'Labels').is_dir():
+            return 'vitaldb'
+        if (root / 'Labels').is_dir() and (root / 'RawData').is_dir():
+            return 'MUST'
+        if (root / 'bg_re.xlsx').is_file():
+            return 'southwest'
+    return raw
+
+
 def basic_feature_keys(dataset: str) -> tuple:
-    return BASIC_FEATURE_KEYS.get(dataset, DEFAULT_BASIC_FEATURE_KEYS)
+    return BASIC_FEATURE_KEYS.get(resolve_config_dataset(dataset), DEFAULT_BASIC_FEATURE_KEYS)
 
 
 def ppg_sampling_rate(dataset: str) -> float:
-    return PPG_SAMPLING_RATE.get(dataset, DEFAULT_PPG_SAMPLING_RATE)
+    return PPG_SAMPLING_RATE.get(resolve_config_dataset(dataset), DEFAULT_PPG_SAMPLING_RATE)
 
 
 def ppg_feature_groups(dataset: str) -> tuple[str, ...]:
-    return PPG_FEATURE_GROUPS.get(dataset, DEFAULT_PPG_FEATURE_GROUPS)
+    return PPG_FEATURE_GROUPS.get(resolve_config_dataset(dataset), DEFAULT_PPG_FEATURE_GROUPS)
 
 
 def ppg_trim_fractions(dataset: str) -> tuple[float, float]:
-    return PPG_TRIM_FRACTIONS.get(dataset, DEFAULT_PPG_TRIM_FRACTIONS)
+    return PPG_TRIM_FRACTIONS.get(resolve_config_dataset(dataset), DEFAULT_PPG_TRIM_FRACTIONS)
 
 
 def ppg_filter(dataset: str) -> str:
-    return PPG_FILTER.get(dataset, DEFAULT_PPG_FILTER)
+    return PPG_FILTER.get(resolve_config_dataset(dataset), DEFAULT_PPG_FILTER)
 
 
 def ppg_target_fs(dataset: str):
-    return PPG_TARGET_FS.get(dataset, DEFAULT_PPG_TARGET_FS)
+    return PPG_TARGET_FS.get(resolve_config_dataset(dataset), DEFAULT_PPG_TARGET_FS)
 
 
 def ppg_best_segment_seconds(dataset: str):
-    return PPG_BEST_SEGMENT_SECONDS.get(dataset, DEFAULT_PPG_BEST_SEGMENT_SECONDS)
+    return PPG_BEST_SEGMENT_SECONDS.get(
+        resolve_config_dataset(dataset), DEFAULT_PPG_BEST_SEGMENT_SECONDS
+    )
 
 
 def ppg_sqa_threshold(dataset: str):
-    return PPG_SQA_THRESHOLD.get(dataset, DEFAULT_PPG_SQA_THRESHOLD)
+    return PPG_SQA_THRESHOLD.get(resolve_config_dataset(dataset), DEFAULT_PPG_SQA_THRESHOLD)
+
+
+def resolve_ppg_center_window_seconds(ppg_seconds: float | None = None) -> float | None:
+    """Center-crop length in seconds for any dataset.
+
+    ``ppg_seconds`` from --ppg-seconds:
+      None / <=0 → no crop (full on-disk signal)
+      >0         → keep that many seconds centered on the file midpoint
+    """
+    if ppg_seconds is None:
+        return None
+    seconds = float(ppg_seconds)
+    if seconds <= 0:
+        return None
+    return seconds
 
 
 def catboost_kwargs() -> dict:

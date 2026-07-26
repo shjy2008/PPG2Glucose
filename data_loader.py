@@ -22,6 +22,7 @@ from config import (
     ppg_sqa_threshold,
     ppg_target_fs,
     ppg_trim_fractions,
+    resolve_ppg_center_window_seconds,
 )
 from data_basic_info import extract_basic_info
 from data_ppg import (
@@ -49,6 +50,7 @@ def _ppg_cache_fingerprint(
     window_seconds: float,
     max_samples: int | None,
     identity: dict,
+    center_window_seconds: float | None = None,
 ) -> dict:
     return {
         'dataset': dataset_name,
@@ -64,6 +66,7 @@ def _ppg_cache_fingerprint(
         'ppg_best_segment_hop_seconds': PPG_BEST_SEGMENT_HOP_SECONDS,
         'ppg_sqa_threshold': ppg_sqa_threshold(dataset_name),
         'ppg_sqa_window_seconds': PPG_SQA_WINDOW_SECONDS,
+        'ppg_center_window_seconds': center_window_seconds,
         'identity': identity,
     }
 
@@ -90,6 +93,7 @@ def _ppg_feature_dicts(
     fs: float,
     window_seconds: float,
     dataset_name: str,
+    center_window_seconds: float | None = None,
 ) -> list[dict]:
     """Full-signal features when window_seconds<=0; else one dict per window."""
     trim_fractions = ppg_trim_fractions(dataset_name)
@@ -98,6 +102,8 @@ def _ppg_feature_dicts(
     best_segment_seconds = ppg_best_segment_seconds(dataset_name)
     feature_groups = ppg_feature_groups(dataset_name)
     sqa_threshold = ppg_sqa_threshold(dataset_name)
+    if center_window_seconds is None:
+        center_window_seconds = resolve_ppg_center_window_seconds()
     if window_seconds is None or window_seconds <= 0:
         features = extract_raw_ppg(
             signal_path,
@@ -109,6 +115,7 @@ def _ppg_feature_dicts(
             feature_groups=feature_groups,
             sqa_threshold=sqa_threshold,
             sqa_window_seconds=PPG_SQA_WINDOW_SECONDS,
+            center_window_seconds=center_window_seconds,
         )
         return [] if features is None else [features]
     return extract_raw_ppg_windows(
@@ -121,19 +128,34 @@ def _ppg_feature_dicts(
         best_segment_seconds=best_segment_seconds,
         feature_groups=feature_groups,
         sqa_threshold=sqa_threshold,
+        center_window_seconds=center_window_seconds,
     )
 
+
+def _config_dataset_name(dataset: str | Path | None, layout: str) -> str:
+    """Prefer CLI name (vitaldb) over layout for config lookups."""
+    from config import DATASET_CONFIG_PROFILE, DATASET_ROOTS
+
+    if dataset is None:
+        return layout
+    key = dataset.name if isinstance(dataset, Path) else str(dataset)
+    if key in DATASET_ROOTS or key in DATASET_CONFIG_PROFILE:
+        return key
+    name = Path(key).name
+    if name in DATASET_ROOTS or name in DATASET_CONFIG_PROFILE:
+        return name
+    return layout
+
+
 def resolve_dataset_root(dataset: str | Path | None = None) -> Path:
+    from config import DATASET_ROOTS
+
     if dataset is None:
         dataset = 'southwest'
     if isinstance(dataset, Path):
         root = dataset
-    elif dataset == 'MUST':
-        root = Path('dataset/MUST')
-    elif dataset == 'vitaldb':
-        root = Path('dataset/vitaldb')
-    elif dataset == 'southwest':
-        root = Path('dataset/southwest')
+    elif str(dataset) in DATASET_ROOTS:
+        root = DATASET_ROOTS[str(dataset)]
     else:
         root = Path(dataset)
     if not root.is_absolute():
@@ -173,6 +195,7 @@ def load_dataset(
     max_samples: int | None = None,
     window_seconds: float = DEFAULT_WINDOW_SECONDS,
     refresh_cache: bool = False,
+    ppg_seconds: float | None = None,
 ) -> pd.DataFrame:
     if labels_dir is not None or raw_data_dir is not None:
         if labels_dir is None or raw_data_dir is None:
@@ -185,24 +208,28 @@ def load_dataset(
             max_samples=max_samples,
             window_seconds=window_seconds,
             refresh_cache=refresh_cache,
+            ppg_seconds=ppg_seconds,
         )
 
     root = resolve_dataset_root(dataset)
     layout = dataset_layout(root)
+    config_name = _config_dataset_name(dataset, layout)
     if layout in {'MUST', 'vitaldb'}:
         return _load_labels_rawdata_dataset(
             root / 'Labels',
             root / 'RawData',
-            layout,
+            config_name,
             max_samples=max_samples,
             window_seconds=window_seconds,
             refresh_cache=refresh_cache,
+            ppg_seconds=ppg_seconds,
         )
     return _load_southwest_dataset(
         root,
         window_seconds=window_seconds,
         max_samples=max_samples,
         refresh_cache=refresh_cache,
+        ppg_seconds=ppg_seconds,
     )
 
 
@@ -213,17 +240,25 @@ def _load_labels_rawdata_dataset(
     max_samples: int | None = None,
     window_seconds: float = DEFAULT_WINDOW_SECONDS,
     refresh_cache: bool = False,
+    ppg_seconds: float | None = None,
 ) -> pd.DataFrame:
     label_files = sorted(labels_dir.glob('label_*.csv'))
     if not label_files:
         raise RuntimeError(f'No label files found in {labels_dir}')
 
+    center_seconds = resolve_ppg_center_window_seconds(ppg_seconds)
     identity = {
         'n_label_files': len(label_files),
         'max_label_mtime': round(max(p.stat().st_mtime for p in label_files), 3),
         'raw_data_mtime': round(raw_data_dir.stat().st_mtime, 3),
     }
-    fingerprint = _ppg_cache_fingerprint(dataset_name, window_seconds, max_samples, identity)
+    fingerprint = _ppg_cache_fingerprint(
+        dataset_name,
+        window_seconds,
+        max_samples,
+        identity,
+        center_window_seconds=center_seconds,
+    )
     cache_path = _feature_cache_path(dataset_name, fingerprint)
     cached = _try_load_feature_cache(cache_path, refresh_cache)
     if cached is not None:
@@ -236,6 +271,10 @@ def _load_labels_rawdata_dataset(
     n_files = len(label_files)
     progress_every = max(1, n_files // 20)  # ~5% steps
     print(f'Loading {n_files} sample(s) from {labels_dir} (PPG feature extraction)...')
+    if center_seconds:
+        print(f'Center-cropping PPG to {center_seconds:g} s ({dataset_name})')
+    else:
+        print(f'Using full on-disk PPG signal ({dataset_name})')
 
     records = []
     for i, label_path in enumerate(label_files, start=1):
@@ -273,6 +312,7 @@ def _load_labels_rawdata_dataset(
             fs=ppg_sampling_rate(dataset_name),
             window_seconds=window_seconds,
             dataset_name=dataset_name,
+            center_window_seconds=center_seconds,
         )
         if not feature_dicts:
             print('Skipping', label_path.name, 'because signal is empty or failed SQA')
@@ -309,15 +349,23 @@ def _load_southwest_dataset(
     window_seconds: float = DEFAULT_WINDOW_SECONDS,
     max_samples: int | None = None,
     refresh_cache: bool = False,
+    ppg_seconds: float | None = None,
 ) -> pd.DataFrame:
     ppg_dir = root / 'ppg'
     ppg_files = list(ppg_dir.glob('*.txt')) if ppg_dir.is_dir() else []
+    center_seconds = resolve_ppg_center_window_seconds(ppg_seconds)
     identity = {
         'n_ppg_files': len(ppg_files),
         'max_ppg_mtime': round(max((p.stat().st_mtime for p in ppg_files), default=0.0), 3),
         'bg_re_mtime': round((root / 'bg_re.xlsx').stat().st_mtime, 3),
     }
-    fingerprint = _ppg_cache_fingerprint('southwest', window_seconds, max_samples, identity)
+    fingerprint = _ppg_cache_fingerprint(
+        'southwest',
+        window_seconds,
+        max_samples,
+        identity,
+        center_window_seconds=center_seconds,
+    )
     cache_path = _feature_cache_path('southwest', fingerprint)
     cached = _try_load_feature_cache(cache_path, refresh_cache)
     if cached is not None:
@@ -328,6 +376,11 @@ def _load_southwest_dataset(
     if max_samples is not None:
         rows = rows.iloc[:max_samples]
         print(f'Limited to {len(rows)} sample(s)')
+
+    if center_seconds:
+        print(f'Center-cropping PPG to {center_seconds:g} s (southwest)')
+    else:
+        print('Using full on-disk PPG signal (southwest)')
 
     records = []
     for _, row in rows.iterrows():
@@ -353,6 +406,7 @@ def _load_southwest_dataset(
             fs=ppg_sampling_rate('southwest'),
             window_seconds=window_seconds,
             dataset_name='southwest',
+            center_window_seconds=center_seconds,
         )
         if not feature_dicts:
             print('Skipping subject', subject_id_int, 'because signal is empty or failed SQA')
@@ -401,6 +455,7 @@ def load_waveform_dataset(
     resample: bool = False,
     max_samples: int | None = None,
     return_groups: bool = False,
+    ppg_seconds: float | None = None,
 ) -> tuple[np.ndarray, ...]:
     """Load per-session PPG waveforms and glucose targets (mmol/L).
 
@@ -421,19 +476,22 @@ def load_waveform_dataset(
             include_basic=include_basic,
             resample=resample,
             max_samples=max_samples,
+            ppg_seconds=ppg_seconds,
         )
     else:
         root = resolve_dataset_root(dataset)
         layout = dataset_layout(root)
+        config_name = _config_dataset_name(dataset, layout)
         if layout in {'MUST', 'vitaldb'}:
             signals, demographics, targets, groups = _load_labels_rawdata_waveform_dataset(
                 root / 'Labels',
                 root / 'RawData',
-                layout,
+                config_name,
                 signal_length=signal_length,
                 include_basic=include_basic,
                 resample=resample,
                 max_samples=max_samples,
+                ppg_seconds=ppg_seconds,
             )
         else:
             signals, demographics, targets, groups = _load_southwest_waveform_dataset(
@@ -441,6 +499,7 @@ def load_waveform_dataset(
                 signal_length=signal_length,
                 include_basic=include_basic,
                 resample=resample,
+                ppg_seconds=ppg_seconds,
             )
 
     targets, signals, demographics, groups = exclude_target_outlier_arrays(
@@ -462,6 +521,7 @@ def _load_labels_rawdata_waveform_dataset(
     include_basic: bool = True,
     resample: bool = False,
     max_samples: int | None = None,
+    ppg_seconds: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     label_files = sorted(labels_dir.glob('label_*.csv'))
     if not label_files:
@@ -469,6 +529,15 @@ def _load_labels_rawdata_waveform_dataset(
     if max_samples is not None:
         label_files = label_files[:max_samples]
         print(f'Limited to {len(label_files)} sample(s)')
+
+    center_seconds = resolve_ppg_center_window_seconds(ppg_seconds)
+    if center_seconds:
+        print(
+            f'Center-cropping PPG to {center_seconds:g} s '
+            f'({dataset_name}, fs={ppg_sampling_rate(dataset_name):g} Hz)'
+        )
+    else:
+        print(f'Using full on-disk PPG signal ({dataset_name})')
 
     pending = []
     lengths = []
@@ -514,6 +583,7 @@ def _load_labels_rawdata_waveform_dataset(
             fs=ppg_sampling_rate(dataset_name),
             filter_name=ppg_filter(dataset_name),
             target_fs=ppg_target_fs(dataset_name),
+            center_window_seconds=center_seconds,
         ).astype(np.float32, copy=False)
         if waveform.size == 0:
             print('Skipping', label_path.name, 'because signal is empty')
@@ -551,9 +621,15 @@ def _load_southwest_waveform_dataset(
     signal_length: int = 0,
     include_basic: bool = True,
     resample: bool = False,
+    ppg_seconds: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     ppg_dir = root / 'ppg'
     metadata = pd.read_excel(root / 'bg_re.xlsx', sheet_name=0, header=1)
+    center_seconds = resolve_ppg_center_window_seconds(ppg_seconds)
+    if center_seconds:
+        print(f'Center-cropping PPG to {center_seconds:g} s (southwest)')
+    else:
+        print('Using full on-disk PPG signal (southwest)')
     pending = []
     lengths = []
     for _, row in metadata[metadata['subject_ID'].notna()].iterrows():
@@ -587,6 +663,7 @@ def _load_southwest_waveform_dataset(
             fs=ppg_sampling_rate('southwest'),
             filter_name=ppg_filter('southwest'),
             target_fs=ppg_target_fs('southwest'),
+            center_window_seconds=center_seconds,
         ).astype(np.float32, copy=False)
         if waveform.size == 0:
             print('Skipping subject', subject_id_int, 'because signal is empty')

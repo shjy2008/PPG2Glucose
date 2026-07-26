@@ -23,7 +23,18 @@ from TinyML_code.resnet import resnet34
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description='Train a 1D ResNet-34 PPG regressor')
-    parser.add_argument('--dataset', default='southwest', help='southwest, MUST, or vitaldb')
+    parser.add_argument(
+        '--dataset',
+        default='southwest',
+        help='southwest, MUST, vitaldb (16 min files under dataset/vitaldb_16min), or a path',
+    )
+    parser.add_argument(
+        '--ppg-seconds',
+        type=float,
+        default=None,
+        help='Center-crop PPG to this many seconds around mid-file. '
+             'Default: 60 for vitaldb, full signal for other datasets. 0 = full signal.',
+    )
     parser.add_argument('--n-splits', type=int, default=5)
     parser.add_argument('--max-samples', type=int, default=None, help='Use only the first N label files')
     parser.add_argument('--seed', type=int, default=42)
@@ -417,7 +428,25 @@ def main() -> None:
     set_seed(args.seed)
     device = torch.device('cpu') if args.quick else torch_device()
 
+    from config import (
+        DEFAULT_VITALDB_PPG_SECONDS,
+        resolve_config_dataset,
+        resolve_ppg_center_window_seconds,
+    )
+    from data_loader import resolve_dataset_root
+
+    ppg_seconds = args.ppg_seconds
+    if resolve_config_dataset(args.dataset) == 'vitaldb' and ppg_seconds is None:
+        ppg_seconds = DEFAULT_VITALDB_PPG_SECONDS
+    center = resolve_ppg_center_window_seconds(ppg_seconds)
+    root = resolve_dataset_root(args.dataset)
+
     print(f'Using dataset: {args.dataset} (window_seconds={window_seconds})')
+    if center is None:
+        print(f'PPG: root={root}, using full on-disk signal')
+    else:
+        print(f'PPG: root={root}, center-crop {center:g} s')
+
     # Load native-length waveforms when windowing so we can chop before resize.
     load_length = 0 if window_seconds > 0 else args.signal_length
     signals, demographics, targets, groups = data_loader.load_waveform_dataset(
@@ -427,6 +456,7 @@ def main() -> None:
         resample=True,
         max_samples=args.max_samples,
         return_groups=True,
+        ppg_seconds=ppg_seconds,
     )
     if window_seconds > 0:
         n_labs = len(targets)

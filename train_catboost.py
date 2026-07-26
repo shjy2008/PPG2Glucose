@@ -48,7 +48,18 @@ DATASET_PARAMS = {
 
 def build_parser():
     p = argparse.ArgumentParser()
-    p.add_argument('--dataset', default='southwest', help='southwest, MUST, or vitaldb')
+    p.add_argument(
+        '--dataset',
+        default='southwest',
+        help='southwest, MUST, vitaldb (16 min files under dataset/vitaldb_16min), or a path',
+    )
+    p.add_argument(
+        '--ppg-seconds',
+        type=float,
+        default=None,
+        help='Center-crop PPG to this many seconds around mid-file. '
+             'Default: 60 for vitaldb, full signal for other datasets. 0 = full signal.',
+    )
     p.add_argument(
         '--params',
         default=None,
@@ -92,7 +103,9 @@ def build_parser():
 
 def load_params(dataset: str, path: Optional[str] = None) -> dict:
     if path is None:
-        return {**DEFAULT_PARAMS, **DATASET_PARAMS.get(dataset, {})}
+        from config import resolve_config_dataset
+
+        return {**DEFAULT_PARAMS, **DATASET_PARAMS.get(resolve_config_dataset(dataset), {})}
     payload = json.loads(Path(path).read_text())
     if 'params' in payload:
         return dict(payload['params'])
@@ -116,18 +129,33 @@ def main():
         DEFAULT_WINDOW_SECONDS if args.window_seconds is None else args.window_seconds
     )
     from config import (
+        DEFAULT_VITALDB_PPG_SECONDS,
         ppg_best_segment_seconds,
         ppg_feature_groups,
         ppg_filter,
         ppg_sqa_threshold,
         ppg_target_fs,
+        resolve_config_dataset,
+        resolve_ppg_center_window_seconds,
     )
+    from data_loader import resolve_dataset_root
+
+    ppg_seconds = args.ppg_seconds
+    if resolve_config_dataset(args.dataset) == 'vitaldb' and ppg_seconds is None:
+        ppg_seconds = DEFAULT_VITALDB_PPG_SECONDS
+    center = resolve_ppg_center_window_seconds(ppg_seconds)
+    root = resolve_dataset_root(args.dataset)
+    if center is None:
+        print(f'PPG: root={root}, using full on-disk signal')
+    else:
+        print(f'PPG: root={root}, center-crop {center:g} s')
 
     ds = data_loader.load_dataset(
         args.dataset,
         max_samples=args.max_samples,
         window_seconds=window_seconds,
         refresh_cache=args.refresh_cache,
+        ppg_seconds=ppg_seconds,
     )
     # Leakage if the same subject appears in train and val with multiple rows
     # (MUST/vitaldb sessions, or windowed PPG).

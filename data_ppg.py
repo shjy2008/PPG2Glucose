@@ -158,6 +158,22 @@ def effective_sampling_rate(source_fs: float, target_fs: float | None) -> float:
     return target
 
 
+def center_crop_seconds(
+    signal: np.ndarray,
+    fs: float,
+    window_seconds: float | None,
+) -> np.ndarray:
+    """Keep a centered window of ``window_seconds`` (None/<=0 keeps the full signal)."""
+    values = np.asarray(signal, dtype=float).reshape(-1)
+    if window_seconds is None or float(window_seconds) <= 0 or values.size == 0:
+        return values
+    n = int(round(float(window_seconds) * float(fs)))
+    if n <= 0 or values.size <= n:
+        return values
+    start = (values.size - n) // 2
+    return values[start : start + n]
+
+
 def downsample_signal(
     signal: np.ndarray,
     source_fs: float,
@@ -268,12 +284,18 @@ def read_signal_waveform(
     fs: float = DEFAULT_PPG_SAMPLING_RATE,
     filter_name: str = DEFAULT_PPG_FILTER,
     target_fs: float | None = DEFAULT_PPG_TARGET_FS,
+    center_window_seconds: float | None = None,
 ) -> np.ndarray:
-    """Return PPG samples (trim → filter at native fs → optional downsample)."""
+    """Return PPG samples (trim → filter at native fs → optional downsample → center crop)."""
     signal = _read_signal_values(signal_path)
     signal = trim_signal(signal, *trim_fractions)
     signal = apply_ppg_filter(signal, fs=fs, filter_name=filter_name)
-    return downsample_signal(signal, source_fs=fs, target_fs=target_fs)
+    signal = downsample_signal(signal, source_fs=fs, target_fs=target_fs)
+    return center_crop_seconds(
+        signal,
+        fs=effective_sampling_rate(fs, target_fs),
+        window_seconds=center_window_seconds,
+    )
 
 
 def _read_signal_values(signal_path: Path) -> np.ndarray:
@@ -648,6 +670,7 @@ def extract_raw_ppg(
     feature_groups: tuple[str, ...] = DEFAULT_PPG_FEATURE_GROUPS,
     sqa_threshold: float | None = None,
     sqa_window_seconds: float = PPG_SQA_WINDOW_SECONDS,
+    center_window_seconds: float | None = None,
 ) -> dict | None:
     signal = read_signal_waveform(
         Path(signal_path),
@@ -655,6 +678,7 @@ def extract_raw_ppg(
         fs=fs,
         filter_name=filter_name,
         target_fs=target_fs,
+        center_window_seconds=center_window_seconds,
     )
     fs_eff = effective_sampling_rate(fs, target_fs)
     signal = select_best_segment(signal, fs=fs_eff, window_seconds=best_segment_seconds)
@@ -696,6 +720,7 @@ def extract_raw_ppg_windows(
     best_segment_seconds: float | None = DEFAULT_PPG_BEST_SEGMENT_SECONDS,
     feature_groups: tuple[str, ...] = DEFAULT_PPG_FEATURE_GROUPS,
     sqa_threshold: float | None = None,
+    center_window_seconds: float | None = None,
 ) -> list[dict]:
     signal = read_signal_waveform(
         Path(signal_path),
@@ -703,6 +728,7 @@ def extract_raw_ppg_windows(
         fs=fs,
         filter_name=filter_name,
         target_fs=target_fs,
+        center_window_seconds=center_window_seconds,
     )
     fs_eff = effective_sampling_rate(fs, target_fs)
     signal = select_best_segment(signal, fs=fs_eff, window_seconds=best_segment_seconds)
