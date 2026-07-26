@@ -36,7 +36,7 @@ BASIC_FEATURE_KEYS = {
     # MUST: age+weight + g3-g6; with CatBoost depth=4 → MAE 0.7075, R2 +0.0003.
     # (depth=3 was MAE 0.7109 / R2 -0.0140; age-only baseline MAE 0.7119 / R2 -0.0182)
     'MUST': ('age', 'weight'),
-    'vitaldb': (),
+    'vitaldb': ('age', 'height', 'weight', 'bmi'),
 }
 DEFAULT_BASIC_FEATURE_KEYS = ()
 
