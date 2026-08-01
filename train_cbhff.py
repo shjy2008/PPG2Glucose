@@ -1,4 +1,10 @@
-"""Train Ali et al. CBHFF (JBHI 2025) on southwest / MUST / vitaldb."""
+"""Train Ali et al. CBHFF (JBHI 2025) on southwest / MUST / vitaldb.
+
+Compare leakage with the same train knobs:
+  subject-wise, full signal:   python train_cbhff.py --dataset southwest
+  sample-wise + 15 s windows:  python train_cbhff.py --dataset southwest \\
+                                   --sample-wise --window-seconds 15
+"""
 
 from __future__ import annotations
 
@@ -47,18 +53,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument('--weight-decay', type=float, default=0.0)
     p.add_argument('--patience', type=int, default=5)
     p.add_argument('--signal-length', type=int, default=2048)
-    p.add_argument('--window-seconds', type=float, default=None)
+    p.add_argument(
+        '--window-seconds',
+        type=float,
+        default=None,
+        help='Non-overlapping windows with shared glucose label '
+             f'(default: {DEFAULT_WINDOW_SECONDS}; 0 = full signal)',
+    )
     p.add_argument(
         '--sample-wise',
         action='store_true',
-        help='Random KFold over rows (paper-style leakage)',
+        help='Random KFold over rows instead of subject-wise GroupKFold',
     )
-    p.add_argument(
-        '--paper-protocol',
-        action='store_true',
-        help='15 s windows, sample-wise 10-fold, batch 128, 30 epochs, seed 8',
-    )
-    p.add_argument('--quick', action='store_true')
     return p
 
 
@@ -158,30 +164,12 @@ def run_fold(signals, targets, train_index, test_index, args, device, groups, se
 
 def main() -> None:
     args = build_parser().parse_args()
-    if args.paper_protocol:
-        args.window_seconds = 15.0
-        args.sample_wise = True
-        args.n_splits = 10
-        args.epochs = 30
-        args.batch_size = 128
-        args.patience = 0
-        args.seeds = [8]
-        args.seed = 8
-    if args.quick:
-        args.n_splits = 3
-        args.epochs = 2
-        args.patience = 1
-        args.signal_length = 512
-        args.batch_size = 16
-        args.max_samples = args.max_samples or 48
-        args.seeds = [42]
-
     window_seconds = (
         DEFAULT_WINDOW_SECONDS if args.window_seconds is None else args.window_seconds
     )
     seeds = tuple(args.seeds) if args.seeds is not None else DEFAULT_SEEDS
     set_seed(args.seed)
-    device = torch.device('cpu') if args.quick else torch_device()
+    device = torch_device()
 
     ppg_seconds = args.ppg_seconds
     if resolve_config_dataset(args.dataset) == 'vitaldb' and ppg_seconds is None:
