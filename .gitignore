@@ -5,9 +5,8 @@ feature_cache/
 .cache/
 
 # datasets
-dataset/vitaldb
-dataset/ieb
-dataset/MUST
+dataset/
+!/dataset/southwest
 
 .vscode
 .DS_Store

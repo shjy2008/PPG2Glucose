@@ -4,21 +4,25 @@ from typing import Optional
 import numpy as np
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, TensorDataset
-from sklearn.model_selection import GroupShuffleSplit
+from torch.utils.data import DataLoader
 
 import data_loader
 import utils
 from config import (
     DEFAULT_WINDOW_SECONDS,
-    ppg_sampling_rate,
-    ppg_target_fs,
     tensor_to_numpy,
     torch_device,
-    torch_float_tensor,
 )
-from data_ppg import effective_sampling_rate, segment_signal
 from TinyML_code.resnet import resnet34
+from waveform_train import (
+    expand_waveform_windows,
+    make_signal_loader,
+    normalize_signals_per_sample,
+    normalize_targets,
+    set_seed,
+    split_train_val,
+    standardize_train_test,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -75,96 +79,6 @@ def apply_quick_settings(args) -> None:
     args.signal_length = 512
 
 
-def set_seed(seed: int) -> None:
-    """Make CPU and CUDA training as reproducible as possible."""
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-        # Prefer deterministic cuDNN algorithms; disable auto-tuner.
-        torch.backends.cudnn.deterministic = True
-        torch.backends.cudnn.benchmark = False
-
-
-def normalize_signals_per_sample(signals: np.ndarray) -> np.ndarray:
-    mean = signals.mean(axis=1, keepdims=True)
-    std = signals.std(axis=1, keepdims=True)
-    std = np.where(std == 0, 1.0, std)
-    return ((signals - mean) / std).astype(np.float32, copy=False)
-
-
-def expand_waveform_windows(
-    signals: np.ndarray,
-    demographics: np.ndarray,
-    targets: np.ndarray,
-    groups: np.ndarray,
-    *,
-    dataset: str,
-    window_seconds: float,
-    signal_length: int,
-    resample: bool = True,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Chop each native waveform into windows that share the same glucose label.
-
-    Mimics TinyML / Biosensors: many segments per lab draw, identical BGL label.
-    """
-    fs = effective_sampling_rate(ppg_sampling_rate(dataset), ppg_target_fs(dataset))
-    windowed_signals = []
-    windowed_demographics = []
-    windowed_targets = []
-    windowed_groups = []
-    for index in range(len(targets)):
-        windows = segment_signal(signals[index], fs=fs, window_seconds=window_seconds)
-        if not windows:
-            continue
-        demo = demographics[index]
-        target = targets[index]
-        group = groups[index]
-        for window in windows:
-            resized = data_loader._resize_waveform(
-                np.asarray(window, dtype=np.float32),
-                signal_length,
-                resample=resample,
-            )
-            windowed_signals.append(resized)
-            windowed_demographics.append(demo)
-            windowed_targets.append(target)
-            windowed_groups.append(group)
-
-    if not windowed_signals:
-        raise RuntimeError(
-            f'No windows produced with window_seconds={window_seconds} at fs={fs}'
-        )
-    return (
-        np.stack(windowed_signals, axis=0),
-        np.stack(windowed_demographics, axis=0),
-        np.asarray(windowed_targets, dtype=np.float32),
-        np.asarray(windowed_groups),
-    )
-
-
-def standardize_train_test(
-    train: np.ndarray,
-    validation: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    mean = train.mean(axis=0, keepdims=True)
-    std = train.std(axis=0, keepdims=True)
-    std = np.where(std == 0, 1.0, std)
-    return (
-        ((train - mean) / std).astype(np.float32, copy=False),
-        ((validation - mean) / std).astype(np.float32, copy=False),
-    )
-
-
-def normalize_targets(y_train: np.ndarray) -> tuple[np.ndarray, float, float]:
-    mean = float(y_train.mean())
-    std = float(y_train.std())
-    if std == 0:
-        std = 1.0
-    normalized = ((y_train - mean) / std).astype(np.float32, copy=False)
-    return normalized, mean, std
-
-
 class ResNetRegressor(nn.Module):
     def __init__(self, n_demographics: int = 0):
         super().__init__()
@@ -195,21 +109,13 @@ def make_loader(
     include_basic: bool,
     seed: Optional[int] = None,
 ) -> DataLoader:
-    # torch.tensor avoids torch.from_numpy, which breaks under NumPy 2.x + older PyTorch.
-    tensors = [torch_float_tensor(signals[:, None, :])]
-    if include_basic and demographics.size:
-        tensors.append(torch_float_tensor(demographics))
-    if targets is not None:
-        tensors.append(torch_float_tensor(targets))
-    generator = None
-    if shuffle and seed is not None:
-        generator = torch.Generator()
-        generator.manual_seed(seed)
-    return DataLoader(
-        TensorDataset(*tensors),
-        batch_size=batch_size,
-        shuffle=shuffle,
-        generator=generator,
+    return make_signal_loader(
+        signals,
+        targets,
+        batch_size,
+        shuffle,
+        demographics=demographics if include_basic else None,
+        seed=seed,
     )
 
 
@@ -305,32 +211,6 @@ def predict(
             predictions.append(tensor_to_numpy(model(batch_x, batch_d)))
     normalized = np.concatenate(predictions)
     return (normalized * target_std + target_mean).astype(np.float32, copy=False)
-
-
-def split_train_val(
-    train_index: np.ndarray,
-    groups: Optional[np.ndarray],
-    val_fraction: float,
-    seed: int,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Carve an inner validation set out of the training pool.
-
-    Subject-wise when groups are available so no subject_ID leaks between the
-    inner train and inner validation sets. With a 5-fold outer CV the test fold
-    is 20% of the data; val_fraction=0.25 makes validation 25% of the remaining
-    80% pool = 20% overall, leaving 60% for training (60/20/20 split).
-    """
-    if groups is not None:
-        splitter = GroupShuffleSplit(n_splits=1, test_size=val_fraction, random_state=seed)
-        inner_train, inner_val = next(
-            splitter.split(train_index, groups=groups[train_index])
-        )
-        return train_index[inner_train], train_index[inner_val]
-
-    shuffled = train_index.copy()
-    np.random.RandomState(seed).shuffle(shuffled)
-    n_val = max(1, int(round(len(shuffled) * val_fraction)))
-    return shuffled[n_val:], shuffled[:n_val]
 
 
 def run_fold(
