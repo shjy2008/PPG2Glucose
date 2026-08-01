@@ -35,6 +35,7 @@ from data_ppg import (
 from sklearn.model_selection import KFold
 
 FEATURE_CACHE_DIR = Path(__file__).resolve().parent / 'feature_cache'
+WAVEFORM_CACHE_DIR = Path(__file__).resolve().parent / 'waveform_cache'
 
 _DEMOGRAPHIC_COLUMNS = ('sex', 'age', 'height', 'weight', 'bmi')
 
@@ -45,6 +46,79 @@ def _feature_cache_path(dataset_name: str, fingerprint: dict) -> Path:
     ).hexdigest()[:12]
     FEATURE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     return FEATURE_CACHE_DIR / f'{dataset_name}_{key}.pkl'
+
+
+def _waveform_cache_path(dataset_name: str, fingerprint: dict) -> Path:
+    key = hashlib.sha256(
+        json.dumps(fingerprint, sort_keys=True, default=str).encode()
+    ).hexdigest()[:12]
+    WAVEFORM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    return WAVEFORM_CACHE_DIR / f'{dataset_name}_{key}.npz'
+
+
+def _waveform_cache_fingerprint(
+    dataset_name: str,
+    root: Path,
+    *,
+    signal_length: int,
+    include_basic: bool,
+    resample: bool,
+    max_samples: int | None,
+    ppg_seconds: float | None,
+) -> dict:
+    center = resolve_ppg_center_window_seconds(ppg_seconds)
+    return {
+        'kind': 'waveform',
+        'dataset': dataset_name,
+        'root': str(root.resolve()),
+        'signal_length': int(signal_length),
+        'include_basic': bool(include_basic),
+        'basic_feature_keys': list(basic_feature_keys(dataset_name)) if include_basic else [],
+        'resample': bool(resample),
+        'max_samples': max_samples,
+        'ppg_seconds': ppg_seconds,
+        'ppg_center_window_seconds': center,
+        'ppg_sampling_rate': ppg_sampling_rate(dataset_name),
+        'ppg_target_fs': ppg_target_fs(dataset_name),
+        'ppg_trim_fractions': list(ppg_trim_fractions(dataset_name)),
+        'ppg_filter': ppg_filter(dataset_name),
+    }
+
+
+def _try_load_waveform_cache(
+    cache_path: Path,
+    refresh_cache: bool,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+    if refresh_cache or not cache_path.is_file():
+        return None
+    data = np.load(cache_path, allow_pickle=False)
+    signals = np.asarray(data['signals'], dtype=np.float32)
+    demographics = np.asarray(data['demographics'], dtype=np.float32)
+    targets = np.asarray(data['targets'], dtype=np.float32)
+    groups = np.asarray(data['groups'])
+    print(f'Loaded waveforms from {cache_path.name} ({len(targets)} rows)')
+    return signals, demographics, targets, groups
+
+
+def _save_waveform_cache(
+    cache_path: Path,
+    signals: np.ndarray,
+    demographics: np.ndarray,
+    targets: np.ndarray,
+    groups: np.ndarray,
+    fingerprint: dict,
+) -> None:
+    np.savez_compressed(
+        cache_path,
+        signals=np.asarray(signals, dtype=np.float32),
+        demographics=np.asarray(demographics, dtype=np.float32),
+        targets=np.asarray(targets, dtype=np.float32),
+        groups=np.asarray(groups),
+    )
+    cache_path.with_suffix('.meta.json').write_text(
+        json.dumps(fingerprint, indent=2, sort_keys=True, default=str)
+    )
+    print(f'Saved waveform cache to {cache_path.name} ({len(targets)} rows)')
 
 
 def _ppg_cache_fingerprint(
@@ -563,6 +637,7 @@ def load_waveform_dataset(
     max_samples: int | None = None,
     return_groups: bool = False,
     ppg_seconds: float | None = None,
+    refresh_cache: bool = False,
 ) -> tuple[np.ndarray, ...]:
     """Load per-session PPG waveforms and glucose targets (mmol/L).
 
@@ -571,25 +646,62 @@ def load_waveform_dataset(
         demographics: (n_samples, 4) or (n_samples, 0) when include_basic is False
         targets: (n_samples,)
         groups: subject IDs, returned only when return_groups is True
+
+    Caches resized waveforms under ``waveform_cache/`` (like feature_cache for CatBoost).
     """
+    cache_path = None
+    fingerprint = None
+
     if labels_dir is not None or raw_data_dir is not None:
         if labels_dir is None or raw_data_dir is None:
             raise ValueError('labels_dir and raw_data_dir must both be provided')
-        signals, demographics, targets, groups = _load_labels_rawdata_waveform_dataset(
-            labels_dir,
-            raw_data_dir,
-            'MUST',
+        config_name = 'MUST'
+        root = Path(labels_dir).resolve().parent
+        fingerprint = _waveform_cache_fingerprint(
+            config_name,
+            root,
             signal_length=signal_length,
             include_basic=include_basic,
             resample=resample,
             max_samples=max_samples,
             ppg_seconds=ppg_seconds,
         )
+        cache_path = _waveform_cache_path(config_name, fingerprint)
+        cached = _try_load_waveform_cache(cache_path, refresh_cache)
+        if cached is not None:
+            signals, demographics, targets, groups = cached
+        else:
+            signals, demographics, targets, groups = _load_labels_rawdata_waveform_dataset(
+                labels_dir,
+                raw_data_dir,
+                config_name,
+                signal_length=signal_length,
+                include_basic=include_basic,
+                resample=resample,
+                max_samples=max_samples,
+                ppg_seconds=ppg_seconds,
+            )
+            _save_waveform_cache(
+                cache_path, signals, demographics, targets, groups, fingerprint
+            )
     else:
         root = resolve_dataset_root(dataset)
         layout = dataset_layout(root)
         config_name = _config_dataset_name(dataset, layout)
-        if layout in {'MUST', 'vitaldb'}:
+        fingerprint = _waveform_cache_fingerprint(
+            config_name,
+            root,
+            signal_length=signal_length,
+            include_basic=include_basic,
+            resample=resample,
+            max_samples=max_samples,
+            ppg_seconds=ppg_seconds,
+        )
+        cache_path = _waveform_cache_path(config_name, fingerprint)
+        cached = _try_load_waveform_cache(cache_path, refresh_cache)
+        if cached is not None:
+            signals, demographics, targets, groups = cached
+        elif layout in {'MUST', 'vitaldb'}:
             signals, demographics, targets, groups = _load_labels_rawdata_waveform_dataset(
                 root / 'Labels',
                 root / 'RawData',
@@ -600,6 +712,9 @@ def load_waveform_dataset(
                 max_samples=max_samples,
                 ppg_seconds=ppg_seconds,
             )
+            _save_waveform_cache(
+                cache_path, signals, demographics, targets, groups, fingerprint
+            )
         else:
             signals, demographics, targets, groups = _load_southwest_waveform_dataset(
                 root,
@@ -607,6 +722,9 @@ def load_waveform_dataset(
                 include_basic=include_basic,
                 resample=resample,
                 ppg_seconds=ppg_seconds,
+            )
+            _save_waveform_cache(
+                cache_path, signals, demographics, targets, groups, fingerprint
             )
 
     targets, signals, demographics, groups = exclude_target_outlier_arrays(

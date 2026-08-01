@@ -1,9 +1,8 @@
 """Train Ali et al. CBHFF (JBHI 2025) on southwest / MUST / vitaldb.
 
-Compare leakage with the same train knobs:
-  subject-wise, full signal:   python train_cbhff.py --dataset southwest
-  sample-wise + 15 s windows:  python train_cbhff.py --dataset southwest \\
-                                   --sample-wise --window-seconds 15
+  python train_cbhff.py --dataset southwest
+  python train_cbhff.py --dataset southwest --sample-wise --window-seconds 15
+  python train_cbhff.py --dataset southwest --include-basic
 """
 
 from __future__ import annotations
@@ -36,6 +35,7 @@ from waveform_train import (
     normalize_targets,
     set_seed,
     split_train_val,
+    standardize_train_test,
 )
 
 
@@ -57,15 +57,25 @@ def build_parser() -> argparse.ArgumentParser:
         '--window-seconds',
         type=float,
         default=None,
-        help='Non-overlapping windows with shared glucose label '
-             f'(default: {DEFAULT_WINDOW_SECONDS}; 0 = full signal)',
+        help=f'Non-overlapping windows (default: {DEFAULT_WINDOW_SECONDS}; 0 = full signal)',
     )
+    p.add_argument('--sample-wise', action='store_true')
     p.add_argument(
-        '--sample-wise',
+        '--include-basic',
         action='store_true',
-        help='Random KFold over rows instead of subject-wise GroupKFold',
+        help='Use BASIC_FEATURE_KEYS from config (default: PPG only)',
     )
     return p
+
+
+def _batch(batch, device, with_target: bool):
+    """Unpack (x[, demo][, y]) from make_signal_loader."""
+    x = batch[0].to(device)
+    if with_target:
+        demo = batch[1].to(device) if len(batch) == 3 else None
+        return x, demo, batch[-1].to(device)
+    demo = batch[1].to(device) if len(batch) == 2 else None
+    return x, demo, None
 
 
 def train_model(
@@ -86,10 +96,10 @@ def train_model(
     for epoch in range(args.epochs):
         model.train()
         train_losses = []
-        for batch_x, batch_y in train_loader:
-            batch_x, batch_y = batch_x.to(device), batch_y.to(device)
+        for batch in train_loader:
+            x, demo, y = _batch(batch, device, True)
             optimizer.zero_grad()
-            loss = criterion(model(batch_x).squeeze(-1), batch_y)
+            loss = criterion(model(x, demo).squeeze(-1), y)
             loss.backward()
             optimizer.step()
             train_losses.append(loss.item())
@@ -101,11 +111,9 @@ def train_model(
         model.eval()
         val_losses = []
         with torch.no_grad():
-            for batch_x, batch_y in val_loader:
-                batch_x, batch_y = batch_x.to(device), batch_y.to(device)
-                val_losses.append(
-                    criterion(model(batch_x).squeeze(-1), batch_y).item()
-                )
+            for batch in val_loader:
+                x, demo, y = _batch(batch, device, True)
+                val_losses.append(criterion(model(x, demo).squeeze(-1), y).item())
         val_loss = float(np.mean(val_losses))
         print(
             f'Epoch {epoch + 1}/{args.epochs} - '
@@ -115,9 +123,7 @@ def train_model(
             continue
         if val_loss < best_val:
             best_val = val_loss
-            best_state = {
-                k: v.detach().cpu().clone() for k, v in model.state_dict().items()
-            }
+            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
             remaining = args.patience
         else:
             remaining -= 1
@@ -133,32 +139,48 @@ def predict(model, loader, device, target_mean, target_std) -> np.ndarray:
     model.eval()
     preds = []
     with torch.no_grad():
-        for (batch_x,) in loader:
-            preds.append(tensor_to_numpy(model(batch_x.to(device)).squeeze(-1)))
+        for batch in loader:
+            x, demo, _ = _batch(batch, device, False)
+            preds.append(tensor_to_numpy(model(x, demo).squeeze(-1)))
     return (np.concatenate(preds) * target_std + target_mean).astype(np.float32)
 
 
-def run_fold(signals, targets, train_index, test_index, args, device, groups, seed):
+def run_fold(signals, demographics, targets, train_index, test_index, args, device, groups, seed):
     if args.patience > 0:
         inner_train, inner_val = split_train_val(train_index, groups, 0.25, seed)
     else:
         inner_train, inner_val = train_index, None
 
     y_train, y_mean, y_std = normalize_targets(targets[inner_train])
+    use_basic = demographics.size > 0
+    train_demo = val_demo = test_demo = None
+    if use_basic:
+        train_demo, test_demo = standardize_train_test(
+            demographics[inner_train], demographics[test_index]
+        )
+        if inner_val is not None:
+            _, val_demo = standardize_train_test(
+                demographics[inner_train], demographics[inner_val]
+            )
+
     # drop_last: ChannelGate BN fails on a trailing batch of size 1
     train_loader = make_signal_loader(
-        signals[inner_train], y_train, args.batch_size, True, seed=seed, drop_last=True
+        signals[inner_train], y_train, args.batch_size, True,
+        demographics=train_demo, seed=seed, drop_last=True,
     )
     val_loader = None
     if inner_val is not None:
         y_val = ((targets[inner_val] - y_mean) / y_std).astype(np.float32)
         val_loader = make_signal_loader(
-            signals[inner_val], y_val, args.batch_size, False
+            signals[inner_val], y_val, args.batch_size, False, demographics=val_demo
         )
 
-    model = BloodGlucosePredictor().to(device)
+    n_demo = train_demo.shape[1] if use_basic else 0
+    model = BloodGlucosePredictor(n_demographics=n_demo).to(device)
     train_model(model, train_loader, val_loader, args, device)
-    test_loader = make_signal_loader(signals[test_index], None, args.batch_size, False)
+    test_loader = make_signal_loader(
+        signals[test_index], None, args.batch_size, False, demographics=test_demo
+    )
     return predict(model, test_loader, device, y_mean, y_std)
 
 
@@ -183,10 +205,10 @@ def main() -> None:
     )
 
     load_length = 0 if window_seconds > 0 else args.signal_length
-    signals, _, targets, groups = data_loader.load_waveform_dataset(
+    signals, demographics, targets, groups = data_loader.load_waveform_dataset(
         dataset=args.dataset,
         signal_length=load_length,
-        include_basic=False,
+        include_basic=args.include_basic,
         resample=True,
         max_samples=args.max_samples,
         return_groups=True,
@@ -194,12 +216,8 @@ def main() -> None:
     )
     if window_seconds > 0:
         n_labs = len(targets)
-        empty_demo = np.empty((len(targets), 0), dtype=np.float32)
-        signals, _, targets, groups = expand_waveform_windows(
-            signals,
-            empty_demo,
-            targets,
-            groups,
+        signals, demographics, targets, groups = expand_waveform_windows(
+            signals, demographics, targets, groups,
             dataset=args.dataset,
             window_seconds=window_seconds,
             signal_length=args.signal_length if args.signal_length > 0 else 1024,
@@ -208,9 +226,10 @@ def main() -> None:
 
     signals = normalize_signals_per_sample(signals)
     cv_groups = None if args.sample_wise else groups
+    mode = 'with basic' if args.include_basic and demographics.size else 'PPG only'
     print(
         f'Training CBHFF on {device.type}: {len(targets)} samples, '
-        f'len={signals.shape[1]}, '
+        f'len={signals.shape[1]}, {mode}, '
         + (
             f'sample-wise ({len(np.unique(groups))} subjects)'
             if args.sample_wise
@@ -221,16 +240,13 @@ def main() -> None:
     def predict_fold(train_index, test_index, seed):
         set_seed(seed)
         return run_fold(
-            signals, targets, train_index, test_index, args, device, cv_groups, seed
+            signals, demographics, targets, train_index, test_index,
+            args, device, cv_groups, seed,
         )
 
     utils.run_repeated_kfold_array_cv(
-        targets,
-        predict_fold,
-        model_name='cbhff',
-        n_splits=args.n_splits,
-        seeds=seeds,
-        groups=cv_groups,
+        targets, predict_fold, model_name='cbhff',
+        n_splits=args.n_splits, seeds=seeds, groups=cv_groups,
     )
 
 

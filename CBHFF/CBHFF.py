@@ -89,8 +89,9 @@ class Multiview_Attention(nn.Module):
 
 
 class BloodGlucosePredictor(nn.Module):
-    def __init__(self):
+    def __init__(self, n_demographics: int = 0):
         super().__init__()
+        self.n_demographics = n_demographics
         self.conv1 = nn.Conv1d(1, 16, kernel_size=3, padding=1)
         self.mva1 = Multiview_Attention(16)
         self.bn1 = nn.BatchNorm1d(16)
@@ -123,14 +124,14 @@ class BloodGlucosePredictor(nn.Module):
         self.transform_b = nn.Linear(4, common_size)
         self.transform_c = nn.Linear(2, common_size)
 
-        self.fc1 = nn.Linear(common_size * 6, 256)
+        self.fc1 = nn.Linear(common_size * 6 + n_demographics, 256)
         self.dropout4 = nn.Dropout(0.5)
         self.fc2 = nn.Linear(256, 64)
         self.fc3 = nn.Linear(64, 32)
         self.fc4 = nn.Linear(32, 16)
         self.fc5 = nn.Linear(16, 1)
 
-    def forward(self, x):
+    def forward(self, x, demographics=None):
         x = self.dropout1(self.pool1(F.relu(self.bn1(self.mva1(self.conv1(x))))))
         x = self.dropout2(self.pool2(F.relu(self.bn2(self.mva2(self.conv2(x))))))
         x = self.dropout3(self.pool3(F.relu(self.bn3(self.mva3(self.conv3(x))))))
@@ -144,6 +145,8 @@ class BloodGlucosePredictor(nn.Module):
         block1 = torch.cat((x_a, x_b, x_c), dim=-1)
         block2 = torch.cat((x_a * x_b, x_a * x_c, x_b * x_c), dim=-1)
         hof = torch.cat((block1, block2), dim=-1)
+        if self.n_demographics:
+            hof = torch.cat((hof, demographics), dim=-1)
 
         # Original release used dropout3 here (0.25), not dropout4 (0.5).
         x = self.dropout3(F.relu(self.fc1(hof)))
