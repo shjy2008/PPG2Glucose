@@ -321,6 +321,7 @@ def evaluate_regression(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
         'mard': glucose_mard(y_true, y_pred),
         'zone_a': zone_fractions['zone_a'],
         'zone_b': zone_fractions['zone_b'],
+        'zone_ab': zone_fractions['zone_a'] + zone_fractions['zone_b'],
     }
 
 
@@ -376,6 +377,7 @@ def summarize_repeated_cv_metrics(
         'mard',
         'zone_a',
         'zone_b',
+        'zone_ab',
     ),
 ) -> dict:
     """Aggregate per-fold metric dicts into mean/std summaries."""
@@ -416,6 +418,8 @@ def cv_summary_row(
         'zone_a_std': 100.0 * summary['zone_a']['std'],
         'zone_b_mean': 100.0 * summary['zone_b']['mean'],
         'zone_b_std': 100.0 * summary['zone_b']['std'],
+        'zone_ab_mean': 100.0 * summary['zone_ab']['mean'],
+        'zone_ab_std': 100.0 * summary['zone_ab']['std'],
     }
 
 
@@ -487,6 +491,18 @@ def print_comparison_table(summary_df: pd.DataFrame) -> None:
     print(pd.DataFrame(rows).to_string(index=False))
 
 
+def print_cv_metric_block(row: pd.Series) -> None:
+    print(f"  MAE:      {format_metric_summary(row['mae_mean'], row['mae_std'])} mmol/L")
+    print(f"  RMSE:     {format_metric_summary(row['rmse_mean'], row['rmse_std'])} mmol/L")
+    print(f"  R2:       {format_metric_summary(row['r2_mean'], row['r2_std'])}")
+    print(f"  ACC:      {format_metric_summary(row['acc_mean'], row['acc_std'], decimals=2)}%")
+    print(f"  Zone A:   {format_metric_summary(row['zone_a_mean'], row['zone_a_std'], decimals=2)}%")
+    print(f"  Zone B:   {format_metric_summary(row['zone_b_mean'], row['zone_b_std'], decimals=2)}%")
+    print(f"  Zone A+B: {format_metric_summary(row['zone_ab_mean'], row['zone_ab_std'], decimals=2)}%")
+    print(f"  MARD:     {format_metric_summary(row['mard_mean'], row['mard_std'], decimals=2)}%")
+    print(f"  Pearson:  {format_pearson_summary(row['pearson_oof_r'], row['pearson_oof_p'])}")
+
+
 def print_cv_results(
     summary_df: pd.DataFrame,
     y_true: Optional[np.ndarray] = None,
@@ -497,7 +513,10 @@ def print_cv_results(
     label = 'per model' if len(summary_df) > 1 else ''
     suffix = f' {label}' if label else ''
     print(f'\n=== Cross-validation results (mean ± std, N={n_evaluations}{suffix}) ===')
-    print_comparison_table(summary_df)
+    for _, row in summary_df.iterrows():
+        if len(summary_df) > 1:
+            print(f"\n{row['model']}")
+        print_cv_metric_block(row)
 
     if y_true is None or y_pred is None:
         return
