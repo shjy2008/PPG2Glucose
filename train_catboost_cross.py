@@ -44,22 +44,17 @@ def main():
         preds.append(model.predict(X_test))
     y_pred = np.mean(np.column_stack(preds), axis=1)
 
-    def report(name, pred):
-        m = evaluation.evaluate_regression(y_test, pred)
-        print(f'\n{name}')
-        print(f"  MAE:      {m['mae']:.4f} mmol/L")
-        print(f"  RMSE:     {m['rmse']:.4f} mmol/L")
-        print(f"  R2:       {m['r2']:.4f}")
-        print(f"  ACC:      {100 * m['acc']:.2f}%")
-        print(f"  Zone A:   {100 * m['zone_a']:.2f}%")
-        print(f"  Zone B:   {100 * m['zone_b']:.2f}%")
-        print(f"  Zone A+B: {100 * (m['zone_a'] + m['zone_b']):.2f}%")
-        print(f"  MARD:     {m['mard']:.2f}%")
-        print(f"  Pearson:  {m['pearson_r']:.4f}")
-
-    report(f'CatBoost ({args.train_dataset} → {args.test_dataset})', y_pred)
+    evaluation.print_regression_report(
+        f'CatBoost ({args.train_dataset} → {args.test_dataset})',
+        y_test,
+        y_pred,
+    )
     # Train-mean baseline: R2 is 0 only if this equals mean(y_test).
-    report('Mean baseline (mean train y)', np.full(len(y_test), float(y_train.mean())))
+    evaluation.print_regression_report(
+        'Mean baseline (mean train y)',
+        y_test,
+        np.full(len(y_test), float(y_train.mean())),
+    )
 
 
 if __name__ == '__main__':

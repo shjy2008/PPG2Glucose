@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional, Sequence
 
 import numpy as np
 import torch
@@ -10,7 +10,15 @@ from sklearn.model_selection import GroupShuffleSplit
 from torch.utils.data import DataLoader, TensorDataset
 
 import data_loader
-from config import ppg_sampling_rate, ppg_target_fs, torch_float_tensor
+import evaluation
+from config import (
+    DEFAULT_VITALDB_PPG_SECONDS,
+    basic_feature_keys,
+    ppg_sampling_rate,
+    ppg_target_fs,
+    resolve_config_dataset,
+    torch_float_tensor,
+)
 from data_ppg import effective_sampling_rate, segment_signal
 
 
@@ -145,3 +153,230 @@ def make_signal_loader(
         generator=generator,
         drop_last=drop_last and shuffle and len(signals) >= batch_size,
     )
+
+
+def default_ppg_seconds(dataset: str) -> float | None:
+    if resolve_config_dataset(dataset) == 'vitaldb':
+        return DEFAULT_VITALDB_PPG_SECONDS
+    return None
+
+
+def load_waveform_split(
+    dataset: str,
+    *,
+    signal_length: int,
+    include_basic: bool,
+    window_seconds: float,
+    max_samples: int | None = None,
+    resample: bool = True,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    load_length = 0 if window_seconds > 0 else signal_length
+    signals, demographics, targets, groups = data_loader.load_waveform_dataset(
+        dataset=dataset,
+        signal_length=load_length,
+        include_basic=include_basic,
+        resample=resample,
+        max_samples=max_samples,
+        return_groups=True,
+        ppg_seconds=default_ppg_seconds(dataset),
+    )
+    if window_seconds > 0:
+        n_labs = len(targets)
+        signals, demographics, targets, groups = expand_waveform_windows(
+            signals,
+            demographics,
+            targets,
+            groups,
+            dataset=dataset,
+            window_seconds=window_seconds,
+            signal_length=signal_length if signal_length > 0 else 1024,
+            resample=resample,
+        )
+        print(
+            f'{dataset}: windowed {n_labs} lab draws → {len(targets)} segments '
+            f'({window_seconds:g} s)'
+        )
+    return signals, demographics, targets, groups
+
+
+def _resize_signals(signals: np.ndarray, length: int) -> np.ndarray:
+    if signals.shape[1] == length:
+        return signals
+    return np.stack(
+        [data_loader._resize_waveform(row, length, resample=True) for row in signals],
+        axis=0,
+    )
+
+
+def align_ood_demographics(
+    train_demo: np.ndarray,
+    test_demo: np.ndarray,
+    train_dataset: str,
+    test_dataset: str,
+) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    empty_train = np.empty((len(train_demo), 0), dtype=np.float32)
+    empty_test = np.empty((len(test_demo), 0), dtype=np.float32)
+    if train_demo.size == 0 or test_demo.size == 0:
+        return empty_train, empty_test, []
+    train_keys = list(basic_feature_keys(train_dataset))
+    test_keys = list(basic_feature_keys(test_dataset))
+    shared = [key for key in train_keys if key in test_keys]
+    if not shared:
+        return empty_train, empty_test, []
+    train_idx = [train_keys.index(key) for key in shared]
+    test_idx = [test_keys.index(key) for key in shared]
+    return (
+        np.asarray(train_demo[:, train_idx], dtype=np.float32),
+        np.asarray(test_demo[:, test_idx], dtype=np.float32),
+        shared,
+    )
+
+
+def prepare_ood_waveforms(
+    train_dataset: str,
+    test_dataset: str,
+    *,
+    signal_length: int,
+    include_basic: bool,
+    window_seconds: float,
+    max_samples: int | None = None,
+) -> tuple[
+    np.ndarray, np.ndarray, np.ndarray, np.ndarray,
+    np.ndarray, np.ndarray, np.ndarray, np.ndarray,
+]:
+    train_signals, train_demo, train_y, train_groups = load_waveform_split(
+        train_dataset,
+        signal_length=signal_length,
+        include_basic=include_basic,
+        window_seconds=window_seconds,
+        max_samples=max_samples,
+    )
+    test_signals, test_demo, test_y, test_groups = load_waveform_split(
+        test_dataset,
+        signal_length=signal_length,
+        include_basic=include_basic,
+        window_seconds=window_seconds,
+        max_samples=max_samples,
+    )
+    test_signals = _resize_signals(test_signals, train_signals.shape[1])
+    if include_basic:
+        train_demo, test_demo, demo_keys = align_ood_demographics(
+            train_demo, test_demo, train_dataset, test_dataset
+        )
+    else:
+        demo_keys = []
+        train_demo = np.empty((len(train_y), 0), dtype=np.float32)
+        test_demo = np.empty((len(test_y), 0), dtype=np.float32)
+
+    train_signals = normalize_signals_per_sample(train_signals)
+    test_signals = normalize_signals_per_sample(test_signals)
+    print(
+        f'OOD waveforms: {train_dataset} → {test_dataset}\n'
+        f'  train: {len(train_y)} samples, {len(np.unique(train_groups))} subjects, '
+        f'length={train_signals.shape[1]}\n'
+        f'  test:  {len(test_y)} samples, {len(np.unique(test_groups))} subjects, '
+        f'length={test_signals.shape[1]}\n'
+        f'  demographics: {demo_keys if demo_keys else "PPG only"}'
+    )
+    return (
+        train_signals,
+        train_demo,
+        train_y,
+        train_groups,
+        test_signals,
+        test_demo,
+        test_y,
+        test_groups,
+    )
+
+
+def run_waveform_ood(
+    train_signals: np.ndarray,
+    train_demo: np.ndarray,
+    train_y: np.ndarray,
+    train_groups: np.ndarray,
+    test_signals: np.ndarray,
+    test_demo: np.ndarray,
+    test_y: np.ndarray,
+    *,
+    build_model: Callable[[int], torch.nn.Module],
+    train_model: Callable,
+    predict: Callable,
+    args,
+    device: torch.device,
+    seeds: Sequence[int],
+    model_name: str,
+    drop_last: bool = False,
+    val_fraction: float = 0.25,
+) -> np.ndarray:
+    """Train on the source dataset, evaluate on the held-out target dataset."""
+    use_basic = train_demo.size > 0 and test_demo.size > 0
+    source_index = np.arange(len(train_y))
+    preds = []
+    for seed_index, seed in enumerate(seeds, start=1):
+        print(f'\n--- Seed {seed} ({seed_index}/{len(seeds)}) ---')
+        set_seed(seed)
+        try:
+            inner_train, inner_val = split_train_val(
+                source_index, train_groups, val_fraction, seed
+            )
+        except ValueError:
+            inner_train, inner_val = split_train_val(
+                source_index, None, val_fraction, seed
+            )
+
+        y_train, y_mean, y_std = normalize_targets(train_y[inner_train])
+        train_d = val_d = test_d = None
+        if use_basic:
+            train_d, test_d = standardize_train_test(
+                train_demo[inner_train], test_demo
+            )
+            _, val_d = standardize_train_test(
+                train_demo[inner_train], train_demo[inner_val]
+            )
+
+        train_loader = make_signal_loader(
+            train_signals[inner_train],
+            y_train,
+            args.batch_size,
+            True,
+            demographics=train_d,
+            seed=seed,
+            drop_last=drop_last,
+        )
+        y_val = ((train_y[inner_val] - y_mean) / y_std).astype(np.float32, copy=False)
+        val_loader = make_signal_loader(
+            train_signals[inner_val],
+            y_val,
+            args.batch_size,
+            False,
+            demographics=val_d,
+        )
+        test_loader = make_signal_loader(
+            test_signals,
+            None,
+            args.batch_size,
+            False,
+            demographics=test_d,
+        )
+
+        n_demo = train_d.shape[1] if use_basic else 0
+        model = build_model(n_demo).to(device)
+        train_model(model, train_loader, val_loader, args, device, use_basic)
+        pred = predict(model, test_loader, device, use_basic, y_mean, y_std)
+        preds.append(pred)
+        print(f'Seed {seed}: test MAE={float(np.mean(np.abs(pred - test_y))):.4f} mmol/L')
+
+    y_pred = np.mean(np.column_stack(preds), axis=1)
+    evaluation.print_regression_report(
+        f'{model_name} ({args.train_dataset} → {args.test_dataset})',
+        test_y,
+        y_pred,
+    )
+    evaluation.print_regression_report(
+        'Mean baseline (mean train y)',
+        test_y,
+        np.full(len(test_y), float(train_y.mean())),
+    )
+    return y_pred
+

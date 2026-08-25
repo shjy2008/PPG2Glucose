@@ -324,6 +324,21 @@ def evaluate_regression(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
     }
 
 
+def print_regression_report(name: str, y_true: np.ndarray, y_pred: np.ndarray) -> dict:
+    metrics = evaluate_regression(y_true, y_pred)
+    print(f'\n{name}')
+    print(f"  MAE:      {metrics['mae']:.4f} mmol/L")
+    print(f"  RMSE:     {metrics['rmse']:.4f} mmol/L")
+    print(f"  R2:       {metrics['r2']:.4f}")
+    print(f"  ACC:      {100 * metrics['acc']:.2f}%")
+    print(f"  Zone A:   {100 * metrics['zone_a']:.2f}%")
+    print(f"  Zone B:   {100 * metrics['zone_b']:.2f}%")
+    print(f"  Zone A+B: {100 * (metrics['zone_a'] + metrics['zone_b']):.2f}%")
+    print(f"  MARD:     {metrics['mard']:.2f}%")
+    print(f"  Pearson:  {metrics['pearson_r']:.4f}")
+    return metrics
+
+
 def print_clarke_plot(y_true: np.ndarray, y_pred: np.ndarray) -> None:
     """Save Clarke and SEG scatter plots (metrics come from CV summary)."""
     plot_clarke_error_grid(y_true, y_pred, save_path=CLARKE_PLOT_PATH)
