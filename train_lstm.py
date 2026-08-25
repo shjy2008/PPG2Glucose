@@ -31,9 +31,14 @@ def build_parser():
     )
     p.add_argument('--bidirectional', dest='bidirectional', action='store_true')
     p.add_argument('--unidirectional', dest='bidirectional', action='store_false')
-    p.add_argument('--include-basic', dest='include_basic', action='store_true')
+    p.add_argument(
+        '--include-basic',
+        dest='include_basic',
+        action='store_true',
+        help='Concatenate demographics (default: PPG only)',
+    )
     p.add_argument('--no-basic', dest='include_basic', action='store_false')
-    p.set_defaults(bidirectional=True, include_basic=True)
+    p.set_defaults(bidirectional=True, include_basic=False)
     return p
 
 

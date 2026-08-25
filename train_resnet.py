@@ -61,14 +61,19 @@ def build_parser() -> argparse.ArgumentParser:
         help='Force random KFold over windows/rows (ignore subject_ID). Reproduces the '
              'leaky segment-level split used by TinyML / Biosensors papers.',
     )
-    parser.add_argument('--include-basic', dest='include_basic', action='store_true')
+    parser.add_argument(
+        '--include-basic',
+        dest='include_basic',
+        action='store_true',
+        help='Concatenate overlapping demographics (default: PPG only)',
+    )
     parser.add_argument('--no-basic', dest='include_basic', action='store_false')
     parser.add_argument(
         '--quick',
         action='store_true',
         help='CPU smoke test with fewer epochs and shorter signals',
     )
-    parser.set_defaults(include_basic=True)
+    parser.set_defaults(include_basic=False)
     return parser
 
 

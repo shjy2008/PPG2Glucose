@@ -22,9 +22,14 @@ def build_parser():
     p.add_argument('--learning-rate', type=float, default=1e-3)
     p.add_argument('--weight-decay', type=float, default=1e-4)
     p.add_argument('--signal-length', type=int, default=0, help='0 = median waveform length')
-    p.add_argument('--include-basic', dest='include_basic', action='store_true')
+    p.add_argument(
+        '--include-basic',
+        dest='include_basic',
+        action='store_true',
+        help='Concatenate demographics (default: PPG only)',
+    )
     p.add_argument('--no-basic', dest='include_basic', action='store_false')
-    p.set_defaults(include_basic=True)
+    p.set_defaults(include_basic=False)
     return p
 
 
