@@ -86,6 +86,12 @@ def build_parser():
              'leaky segment-level splits; overrides auto subject-wise CV.',
     )
     p.add_argument(
+        '--pas',
+        action='store_true',
+        help='Participant-aware split: hold out a session from subjects with 2+ '
+             'recordings; single-session subjects stay in train. MUST and VitalDB only.',
+    )
+    p.add_argument(
         '--select-top',
         type=int,
         default=None,
@@ -162,9 +168,11 @@ def main():
     multi_sample_subjects = (
         'subject_ID' in ds.columns and ds.groupby('subject_ID').size().max() > 1
     )
-    if args.sample_wise and args.subject_wise:
-        raise SystemExit('Use only one of --sample-wise or --subject-wise')
-    subject_wise = (not args.sample_wise) and (args.subject_wise or multi_sample_subjects)
+    mode = utils.exclusive_split_mode(
+        sample_wise=args.sample_wise,
+        subject_wise=args.subject_wise,
+        pas=args.pas,
+    )
     print(
         f"Using dataset: {args.dataset} "
         f"(window_seconds={window_seconds}, ppg_filter={ppg_filter(args.dataset)}, "
@@ -173,7 +181,15 @@ def main():
         f"feature_groups={ppg_feature_groups(args.dataset)}, "
         f"sqa_threshold={ppg_sqa_threshold(args.dataset)})"
     )
-    if subject_wise:
+    sessions = None
+    if mode == 'pas':
+        X, y, feature_names, groups, sessions = data_loader.split(
+            ds, return_groups=True, return_sessions=True
+        )
+        if groups is None or sessions is None:
+            raise SystemExit('PAS requires subject_ID and session_ID (MUST or vitaldb)')
+        print(utils.pas_split_summary(groups, sessions))
+    elif mode != 'sample' and (mode == 'subject' or multi_sample_subjects):
         X, y, feature_names, groups = data_loader.split(ds, return_groups=True)
         if groups is None:
             raise RuntimeError('subject-wise CV requires subject_ID in the dataset')
@@ -184,7 +200,7 @@ def main():
     else:
         X, y, feature_names = data_loader.split(ds)
         groups = None
-        if args.sample_wise:
+        if mode == 'sample':
             print(
                 f"Sample-wise CV (KFold over rows; subject leakage allowed): "
                 f"{len(y)} samples"
@@ -220,6 +236,7 @@ def main():
         n_splits=args.n_splits,
         select_top_n=args.select_top,
         groups=groups,
+        sessions=sessions,
     )
     n_evaluations = int(summary_df['n_evaluations'].iloc[0])
     if args.select_top is not None:

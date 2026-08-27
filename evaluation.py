@@ -268,6 +268,14 @@ def plot_seg_error_grid(
     plt.close(fig)
 
 
+def finite_pairs(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Drop rows where either side is non-finite (e.g. PAS train-only subjects)."""
+    y_true = np.asarray(y_true, dtype=float).reshape(-1)
+    y_pred = np.asarray(y_pred, dtype=float).reshape(-1)
+    mask = np.isfinite(y_true) & np.isfinite(y_pred)
+    return y_true[mask], y_pred[mask]
+
+
 def glucose_prediction_acc(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     """ACC fraction: |error| < 0.83 if y <= 5.55 mmol/L, else relative error <= 15%."""
     y_true = np.asarray(y_true, dtype=float).reshape(-1)
@@ -300,8 +308,20 @@ def format_pearson_summary(r: float, p_value: float) -> str:
 
 
 def evaluate_regression(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
-    y_true = np.asarray(y_true)
-    y_pred = np.asarray(y_pred)
+    y_true, y_pred = finite_pairs(y_true, y_pred)
+    if y_true.size == 0:
+        return {
+            'rmse': np.nan,
+            'mae': np.nan,
+            'r2': np.nan,
+            'pearson_r': np.nan,
+            'pearson_p': np.nan,
+            'acc': np.nan,
+            'mard': np.nan,
+            'zone_a': np.nan,
+            'zone_b': np.nan,
+            'zone_ab': np.nan,
+        }
     rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
     mae = float(mean_absolute_error(y_true, y_pred))
     r2 = float(r2_score(y_true, y_pred))
@@ -410,6 +430,9 @@ def cv_summary_row(
         'pearson_r_std': summary['pearson_r']['std'],
         'pearson_oof_r': oof_metrics['pearson_r'],
         'pearson_oof_p': oof_metrics['pearson_p'],
+        'r2_oof': oof_metrics['r2'],
+        'mae_oof': oof_metrics['mae'],
+        'rmse_oof': oof_metrics['rmse'],
         'acc_mean': 100.0 * summary['acc']['mean'],
         'acc_std': 100.0 * summary['acc']['std'],
         'mard_mean': summary['mard']['mean'],
@@ -521,6 +544,7 @@ def print_cv_results(
     if y_true is None or y_pred is None:
         return
 
+    y_true, y_pred = finite_pairs(y_true, y_pred)
     print_clarke_plot(y_true, y_pred)
     preview = pd.DataFrame({
         'actual (mmol/L)': np.asarray(y_true).reshape(-1),

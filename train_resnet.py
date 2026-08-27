@@ -64,6 +64,12 @@ def build_parser() -> argparse.ArgumentParser:
              'leaky segment-level split used by TinyML / Biosensors papers.',
     )
     parser.add_argument(
+        '--pas',
+        action='store_true',
+        help='Participant-aware split: hold out a session from subjects with 2+ '
+             'recordings; single-session subjects stay in train. MUST and VitalDB only.',
+    )
+    parser.add_argument(
         '--include-basic',
         dest='include_basic',
         action='store_true',
@@ -337,18 +343,19 @@ def main() -> None:
 
     # Load native-length waveforms when windowing so we can chop before resize.
     load_length = 0 if window_seconds > 0 else args.signal_length
-    signals, demographics, targets, groups = data_loader.load_waveform_dataset(
+    signals, demographics, targets, groups, sessions = data_loader.load_waveform_dataset(
         dataset=args.dataset,
         signal_length=load_length,
         include_basic=args.include_basic,
         resample=True,
         max_samples=args.max_samples,
         return_groups=True,
+        return_sessions=True,
         ppg_seconds=ppg_seconds,
     )
     if window_seconds > 0:
         n_labs = len(targets)
-        signals, demographics, targets, groups = expand_waveform_windows(
+        signals, demographics, targets, groups, sessions = expand_waveform_windows(
             signals,
             demographics,
             targets,
@@ -357,6 +364,7 @@ def main() -> None:
             window_seconds=window_seconds,
             signal_length=args.signal_length if args.signal_length > 0 else 1024,
             resample=True,
+            sessions=sessions,
         )
         print(
             f'Windowed {n_labs} lab draws → {len(targets)} segments '
@@ -369,15 +377,20 @@ def main() -> None:
         f'signal length {signals.shape[1]} ({basic_mode})'
     )
 
-    # Paper-style leakage: random KFold over segments so sibling windows from the
-    # same subject/glucose can appear in both train and test.
-    cv_groups = None if args.sample_wise else groups
-    if args.sample_wise:
+    mode = utils.exclusive_split_mode(sample_wise=args.sample_wise, pas=args.pas)
+    cv_sessions = None
+    if mode == 'pas':
+        cv_groups = groups
+        cv_sessions = sessions
+        print(utils.pas_split_summary(groups, sessions))
+    elif mode == 'sample':
+        cv_groups = None
         print(
             f'Sample-wise CV (KFold over rows; subject leakage allowed): '
             f'{len(targets)} samples across {len(np.unique(groups))} subjects'
         )
     else:
+        cv_groups = groups
         print(f'Subject-wise CV: {len(np.unique(groups))} unique subjects')
 
     def predict_fold(
@@ -405,6 +418,7 @@ def main() -> None:
         n_splits=args.n_splits,
         seeds=seeds,
         groups=cv_groups,
+        sessions=cv_sessions,
     )
 
 

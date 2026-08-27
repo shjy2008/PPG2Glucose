@@ -61,6 +61,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument('--sample-wise', action='store_true')
     p.add_argument(
+        '--pas',
+        action='store_true',
+        help='Participant-aware split: hold out a session from subjects with 2+ '
+             'recordings; single-session subjects stay in train. MUST and VitalDB only.',
+    )
+    p.add_argument(
         '--include-basic',
         action='store_true',
         help='Use BASIC_FEATURE_KEYS from config (default: PPG only)',
@@ -205,36 +211,44 @@ def main() -> None:
     )
 
     load_length = 0 if window_seconds > 0 else args.signal_length
-    signals, demographics, targets, groups = data_loader.load_waveform_dataset(
+    signals, demographics, targets, groups, sessions = data_loader.load_waveform_dataset(
         dataset=args.dataset,
         signal_length=load_length,
         include_basic=args.include_basic,
         resample=True,
         max_samples=args.max_samples,
         return_groups=True,
+        return_sessions=True,
         ppg_seconds=ppg_seconds,
     )
     if window_seconds > 0:
         n_labs = len(targets)
-        signals, demographics, targets, groups = expand_waveform_windows(
+        signals, demographics, targets, groups, sessions = expand_waveform_windows(
             signals, demographics, targets, groups,
             dataset=args.dataset,
             window_seconds=window_seconds,
             signal_length=args.signal_length if args.signal_length > 0 else 1024,
+            sessions=sessions,
         )
         print(f'Windowed {n_labs} → {len(targets)} segments ({window_seconds:g} s)')
 
     signals = normalize_signals_per_sample(signals)
-    cv_groups = None if args.sample_wise else groups
-    mode = 'with basic' if args.include_basic and demographics.size else 'PPG only'
+    mode = utils.exclusive_split_mode(sample_wise=args.sample_wise, pas=args.pas)
+    cv_sessions = None
+    if mode == 'pas':
+        cv_groups = groups
+        cv_sessions = sessions
+        split_desc = utils.pas_split_summary(groups, sessions)
+    elif mode == 'sample':
+        cv_groups = None
+        split_desc = f'sample-wise ({len(np.unique(groups))} subjects)'
+    else:
+        cv_groups = groups
+        split_desc = f'subject-wise ({len(np.unique(groups))} unique subjects)'
+    basic_mode = 'with basic' if args.include_basic and demographics.size else 'PPG only'
     print(
         f'Training CBHFF on {device.type}: {len(targets)} samples, '
-        f'len={signals.shape[1]}, {mode}, '
-        + (
-            f'sample-wise ({len(np.unique(groups))} subjects)'
-            if args.sample_wise
-            else f'subject-wise ({len(np.unique(groups))} subjects)'
-        )
+        f'len={signals.shape[1]}, {basic_mode}, {split_desc}'
     )
 
     def predict_fold(train_index, test_index, seed):
@@ -246,7 +260,7 @@ def main() -> None:
 
     utils.run_repeated_kfold_array_cv(
         targets, predict_fold, model_name='cbhff',
-        n_splits=args.n_splits, seeds=seeds, groups=cv_groups,
+        n_splits=args.n_splits, seeds=seeds, groups=cv_groups, sessions=cv_sessions,
     )
 
 

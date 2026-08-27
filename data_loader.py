@@ -88,16 +88,19 @@ def _waveform_cache_fingerprint(
 def _try_load_waveform_cache(
     cache_path: Path,
     refresh_cache: bool,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray] | None:
     if refresh_cache or not cache_path.is_file():
         return None
     data = np.load(cache_path, allow_pickle=False)
+    if 'sessions' not in data.files:
+        return None
     signals = np.asarray(data['signals'], dtype=np.float32)
     demographics = np.asarray(data['demographics'], dtype=np.float32)
     targets = np.asarray(data['targets'], dtype=np.float32)
     groups = np.asarray(data['groups'])
+    sessions = np.asarray(data['sessions']).astype(str)
     print(f'Loaded waveforms from {cache_path.name} ({len(targets)} rows)')
-    return signals, demographics, targets, groups
+    return signals, demographics, targets, groups, sessions
 
 
 def _save_waveform_cache(
@@ -106,6 +109,7 @@ def _save_waveform_cache(
     demographics: np.ndarray,
     targets: np.ndarray,
     groups: np.ndarray,
+    sessions: np.ndarray,
     fingerprint: dict,
 ) -> None:
     np.savez_compressed(
@@ -114,6 +118,7 @@ def _save_waveform_cache(
         demographics=np.asarray(demographics, dtype=np.float32),
         targets=np.asarray(targets, dtype=np.float32),
         groups=np.asarray(groups),
+        sessions=np.asarray(sessions, dtype='U32'),
     )
     cache_path.with_suffix('.meta.json').write_text(
         json.dumps(fingerprint, indent=2, sort_keys=True, default=str)
@@ -636,6 +641,7 @@ def load_waveform_dataset(
     resample: bool = False,
     max_samples: int | None = None,
     return_groups: bool = False,
+    return_sessions: bool = False,
     ppg_seconds: float | None = None,
     refresh_cache: bool = False,
 ) -> tuple[np.ndarray, ...]:
@@ -646,6 +652,7 @@ def load_waveform_dataset(
         demographics: (n_samples, 4) or (n_samples, 0) when include_basic is False
         targets: (n_samples,)
         groups: subject IDs, returned only when return_groups is True
+        sessions: recording IDs, returned only when return_sessions is True
 
     Caches resized waveforms under ``waveform_cache/`` (like feature_cache for CatBoost).
     """
@@ -669,9 +676,9 @@ def load_waveform_dataset(
         cache_path = _waveform_cache_path(config_name, fingerprint)
         cached = _try_load_waveform_cache(cache_path, refresh_cache)
         if cached is not None:
-            signals, demographics, targets, groups = cached
+            signals, demographics, targets, groups, sessions = cached
         else:
-            signals, demographics, targets, groups = _load_labels_rawdata_waveform_dataset(
+            signals, demographics, targets, groups, sessions = _load_labels_rawdata_waveform_dataset(
                 labels_dir,
                 raw_data_dir,
                 config_name,
@@ -682,7 +689,7 @@ def load_waveform_dataset(
                 ppg_seconds=ppg_seconds,
             )
             _save_waveform_cache(
-                cache_path, signals, demographics, targets, groups, fingerprint
+                cache_path, signals, demographics, targets, groups, sessions, fingerprint
             )
     else:
         root = resolve_dataset_root(dataset)
@@ -700,9 +707,9 @@ def load_waveform_dataset(
         cache_path = _waveform_cache_path(config_name, fingerprint)
         cached = _try_load_waveform_cache(cache_path, refresh_cache)
         if cached is not None:
-            signals, demographics, targets, groups = cached
+            signals, demographics, targets, groups, sessions = cached
         elif layout in {'MUST', 'vitaldb'}:
-            signals, demographics, targets, groups = _load_labels_rawdata_waveform_dataset(
+            signals, demographics, targets, groups, sessions = _load_labels_rawdata_waveform_dataset(
                 root / 'Labels',
                 root / 'RawData',
                 config_name,
@@ -713,10 +720,10 @@ def load_waveform_dataset(
                 ppg_seconds=ppg_seconds,
             )
             _save_waveform_cache(
-                cache_path, signals, demographics, targets, groups, fingerprint
+                cache_path, signals, demographics, targets, groups, sessions, fingerprint
             )
         else:
-            signals, demographics, targets, groups = _load_southwest_waveform_dataset(
+            signals, demographics, targets, groups, sessions = _load_southwest_waveform_dataset(
                 root,
                 signal_length=signal_length,
                 include_basic=include_basic,
@@ -724,17 +731,22 @@ def load_waveform_dataset(
                 ppg_seconds=ppg_seconds,
             )
             _save_waveform_cache(
-                cache_path, signals, demographics, targets, groups, fingerprint
+                cache_path, signals, demographics, targets, groups, sessions, fingerprint
             )
 
-    targets, signals, demographics, groups = exclude_target_outlier_arrays(
+    targets, signals, demographics, groups, sessions = exclude_target_outlier_arrays(
         targets,
         signals,
         demographics,
         groups,
+        sessions,
     )
+    if return_groups and return_sessions:
+        return signals, demographics, targets, groups, sessions
     if return_groups:
         return signals, demographics, targets, groups
+    if return_sessions:
+        return signals, demographics, targets, sessions
     return signals, demographics, targets
 
 
@@ -747,7 +759,7 @@ def _load_labels_rawdata_waveform_dataset(
     resample: bool = False,
     max_samples: int | None = None,
     ppg_seconds: float | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     label_files = sorted(labels_dir.glob('label_*.csv'))
     if not label_files:
         raise RuntimeError(f'No label files found in {labels_dir}')
@@ -814,7 +826,7 @@ def _load_labels_rawdata_waveform_dataset(
             print('Skipping', label_path.name, 'because signal is empty')
             continue
 
-        pending.append((waveform, basic_values, target, int(subject_id)))
+        pending.append((waveform, basic_values, target, int(subject_id), str(session_key)))
         lengths.append(int(waveform.size))
 
     if not pending:
@@ -827,17 +839,20 @@ def _load_labels_rawdata_waveform_dataset(
     demographics = []
     targets = []
     groups = []
-    for waveform, basic_values, target, subject_id in pending:
+    sessions = []
+    for waveform, basic_values, target, subject_id, session_id in pending:
         signals.append(_resize_waveform(waveform, target_length, resample=resample))
         demographics.append(basic_values)
         targets.append(target)
         groups.append(subject_id)
+        sessions.append(session_id)
 
     return (
         np.stack(signals, axis=0),
         np.stack(demographics, axis=0),
         np.asarray(targets, dtype=np.float32),
         np.asarray(groups),
+        np.asarray(sessions).astype(str),
     )
 
 
@@ -847,7 +862,7 @@ def _load_southwest_waveform_dataset(
     include_basic: bool = True,
     resample: bool = False,
     ppg_seconds: float | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     ppg_dir = root / 'ppg'
     metadata = pd.read_excel(root / 'bg_re.xlsx', sheet_name=0, header=1)
     center_seconds = resolve_ppg_center_window_seconds(ppg_seconds)
@@ -907,21 +922,24 @@ def _load_southwest_waveform_dataset(
     demographics = []
     targets = []
     groups = []
+    sessions = []
     for waveform, basic_values, target, subject_id in pending:
         signals.append(_resize_waveform(waveform, target_length, resample=resample))
         demographics.append(basic_values)
         targets.append(target)
         groups.append(subject_id)
+        sessions.append('0')
 
     return (
         np.stack(signals, axis=0),
         np.stack(demographics, axis=0),
         np.asarray(targets, dtype=np.float32),
         np.asarray(groups),
+        np.asarray(sessions).astype(str),
     )
 
 
-def split(dataset: pd.DataFrame, return_groups: bool = False):
+def split(dataset: pd.DataFrame, return_groups: bool = False, return_sessions: bool = False):
     feature_columns = [
         column
         for column in dataset.columns
@@ -930,6 +948,7 @@ def split(dataset: pd.DataFrame, return_groups: bool = False):
     X = dataset[feature_columns]
     y = dataset['target']
     groups = dataset['subject_ID'] if 'subject_ID' in dataset.columns else None
+    sessions = dataset['session_ID'] if 'session_ID' in dataset.columns else None
 
     from utils import _log_outlier_exclusion, _target_outlier_mask
 
@@ -938,11 +957,16 @@ def split(dataset: pd.DataFrame, return_groups: bool = False):
     X = X.loc[mask].reset_index(drop=True)
     y = y.loc[mask].reset_index(drop=True)
     feature_columns = list(X.columns)
+    groups_out = None if groups is None else groups.loc[mask].reset_index(drop=True).to_numpy()
+    sessions_out = (
+        None if sessions is None else sessions.loc[mask].reset_index(drop=True).to_numpy()
+    )
+    if return_groups and return_sessions:
+        return X, y, feature_columns, groups_out, sessions_out
     if return_groups:
-        if groups is None:
-            return X, y, feature_columns, None
-        groups = groups.loc[mask].reset_index(drop=True).to_numpy()
-        return X, y, feature_columns, groups
+        return X, y, feature_columns, groups_out
+    if return_sessions:
+        return X, y, feature_columns, sessions_out
     return X, y, feature_columns
 
 

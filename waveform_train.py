@@ -70,13 +70,15 @@ def expand_waveform_windows(
     window_seconds: float,
     signal_length: int,
     resample: bool = True,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    sessions: Optional[np.ndarray] = None,
+) -> tuple[np.ndarray, ...]:
     """Chop each waveform into windows that share the same glucose label."""
     fs = effective_sampling_rate(ppg_sampling_rate(dataset), ppg_target_fs(dataset))
     windowed_signals = []
     windowed_demographics = []
     windowed_targets = []
     windowed_groups = []
+    windowed_sessions = [] if sessions is not None else None
     for index in range(len(targets)):
         windows = segment_signal(signals[index], fs=fs, window_seconds=window_seconds)
         if not windows:
@@ -84,6 +86,7 @@ def expand_waveform_windows(
         demo = demographics[index]
         target = targets[index]
         group = groups[index]
+        session = None if sessions is None else sessions[index]
         for window in windows:
             resized = data_loader._resize_waveform(
                 np.asarray(window, dtype=np.float32),
@@ -94,17 +97,22 @@ def expand_waveform_windows(
             windowed_demographics.append(demo)
             windowed_targets.append(target)
             windowed_groups.append(group)
+            if windowed_sessions is not None:
+                windowed_sessions.append(session)
 
     if not windowed_signals:
         raise RuntimeError(
             f'No windows produced with window_seconds={window_seconds} at fs={fs}'
         )
-    return (
+    out = (
         np.stack(windowed_signals, axis=0),
         np.stack(windowed_demographics, axis=0),
         np.asarray(windowed_targets, dtype=np.float32),
         np.asarray(windowed_groups),
     )
+    if sessions is None:
+        return out
+    return (*out, np.asarray(windowed_sessions).astype(str))
 
 
 def split_train_val(

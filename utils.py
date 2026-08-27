@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from typing import Callable, Dict, Mapping, Optional, Sequence, Tuple
+from typing import Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
 
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import GroupKFold, KFold
@@ -111,13 +111,111 @@ def _warn_nan_features(X: pd.DataFrame, verbose: bool) -> None:
         )
 
 
+def exclusive_split_mode(*, sample_wise: bool = False, subject_wise: bool = False, pas: bool = False):
+    """Return 'sample', 'subject', 'pas', or None. At most one flag may be set."""
+    chosen = [
+        name
+        for name, flag in (
+            ('sample', sample_wise),
+            ('subject', subject_wise),
+            ('pas', pas),
+        )
+        if flag
+    ]
+    if len(chosen) > 1:
+        raise SystemExit('Use only one of --sample-wise, --subject-wise, --pas')
+    return chosen[0] if chosen else None
+
+
+def pas_split_summary(subjects: np.ndarray, sessions: np.ndarray) -> str:
+    """One-line description of a participant-aware split."""
+    subjects = np.asarray(subjects)
+    sessions = np.asarray(sessions).astype(str)
+    n_multi = 0
+    n_single = 0
+    n_holdout_sessions = 0
+    for subject in np.unique(subjects):
+        n_sess = len(np.unique(sessions[subjects == subject]))
+        if n_sess >= 2:
+            n_multi += 1
+            n_holdout_sessions += n_sess
+        else:
+            n_single += 1
+    return (
+        f'Split: PAS (session hold-out; {n_multi} multi-session subjects, '
+        f'{n_holdout_sessions} test-eligible sessions; '
+        f'{n_single} single-session subjects train-only)'
+    )
+
+
+def iter_pas_splits(
+    subjects: np.ndarray,
+    sessions: np.ndarray,
+    n_splits: int,
+    seed: int,
+):
+    """Yield (train_index, test_index) for participant-aware splitting.
+
+    Subjects with 2+ sessions: round-robin hold out one session per fold, keeping
+    the rest in train. Subjects with one session stay in train in every fold.
+    """
+    subjects = np.asarray(subjects)
+    sessions = np.asarray(sessions).astype(str)
+    n = len(subjects)
+    if len(sessions) != n:
+        raise ValueError(f'sessions length ({len(sessions)}) must match samples ({n})')
+
+    by_subject = {}
+    for index, (subject, session) in enumerate(zip(subjects, sessions)):
+        by_subject.setdefault(subject, {}).setdefault(session, []).append(index)
+
+    multi = {subject: sess_map for subject, sess_map in by_subject.items() if len(sess_map) >= 2}
+    if not multi:
+        raise ValueError(
+            'PAS needs subjects with 2+ sessions. This dataset has one recording '
+            'per person (e.g. southwest / IPS-PPG).'
+        )
+
+    rng = np.random.RandomState(seed)
+    fold_test = [[] for _ in range(n_splits)]
+    for sess_map in multi.values():
+        session_ids = list(sess_map)
+        rng.shuffle(session_ids)
+        for offset, session_id in enumerate(session_ids):
+            fold_test[offset % n_splits].extend(sess_map[session_id])
+
+    all_index = np.arange(n)
+    for fold, test_rows in enumerate(fold_test):
+        if not test_rows:
+            raise ValueError(
+                f'PAS fold {fold + 1}/{n_splits} has no test sessions; reduce --n-splits'
+            )
+        test_index = np.unique(np.asarray(test_rows, dtype=int))
+        train_mask = np.ones(n, dtype=bool)
+        train_mask[test_index] = False
+        train_index = all_index[train_mask]
+        test_subjects = set(subjects[test_index])
+        train_subjects = set(subjects[train_index])
+        missing = test_subjects - train_subjects
+        if missing:
+            raise RuntimeError(f'PAS leak: test subjects with no train session: {missing}')
+        yield train_index, test_index
+
+
 def _iter_cv_splits(
     y: np.ndarray,
     n_splits: int,
     seed: int,
     groups: Optional[np.ndarray] = None,
+    sessions: Optional[np.ndarray] = None,
 ):
     """Yield (train_index, val_index). With groups, keep subjects out of both folds."""
+    if sessions is not None:
+        if groups is None:
+            raise ValueError('PAS requires subject groups')
+        yield from iter_pas_splits(groups, sessions, n_splits, seed)
+        return
+
     if groups is None:
         cv = KFold(n_splits=n_splits, shuffle=True, random_state=seed)
         yield from cv.split(y)
@@ -151,6 +249,7 @@ def _run_repeated_kfold_cv(
     n_splits: int = 5,
     seeds: Optional[Sequence[int]] = None,
     groups: Optional[np.ndarray] = None,
+    sessions: Optional[np.ndarray] = None,
     verbose: bool = True,
     fold_log: Optional[Callable[[Dict[str, dict]], str]] = None,
 ) -> Tuple[Dict[str, list[dict]], Dict[str, np.ndarray]]:
@@ -164,11 +263,16 @@ def _run_repeated_kfold_cv(
 
     for seed_index, seed in enumerate(seeds, start=1):
         if verbose:
-            mode = 'GroupKFold (subject-wise)' if groups is not None else 'KFold'
+            if sessions is not None:
+                mode = 'PAS (participant-aware)'
+            elif groups is not None:
+                mode = 'GroupKFold (subject-wise)'
+            else:
+                mode = 'KFold'
             print(f'--- Seed {seed} ({seed_index}/{len(seeds)}) [{mode}] ---')
 
         for fold_index, (train_index, val_index) in enumerate(
-            _iter_cv_splits(y, n_splits, seed, groups=groups),
+            _iter_cv_splits(y, n_splits, seed, groups=groups, sessions=sessions),
             start=1,
         ):
             predictions_by_model = run_fold(train_index, val_index, seed)
@@ -193,7 +297,12 @@ def _run_repeated_kfold_cv(
                 )
                 print(f'  Fold {fold_index}: {message}')
 
-    oof_by_model = {name: oof_sum[name] / oof_count[name] for name in model_names}
+    oof_by_model = {}
+    for name in model_names:
+        oof = np.full(len(y), np.nan, dtype=float)
+        seen = oof_count[name] > 0
+        oof[seen] = oof_sum[name][seen] / oof_count[name][seen]
+        oof_by_model[name] = oof
     return fold_metrics, oof_by_model
 
 
@@ -205,6 +314,7 @@ def run_repeated_kfold_array_cv(
     n_splits: int = 5,
     seeds: Optional[Sequence[int]] = None,
     groups: Optional[np.ndarray] = None,
+    sessions: Optional[np.ndarray] = None,
     print_target_distribution: bool = True,
     verbose: bool = True,
 ) -> Tuple[list[dict], pd.DataFrame, np.ndarray]:
@@ -224,6 +334,7 @@ def run_repeated_kfold_array_cv(
         n_splits=n_splits,
         seeds=seeds,
         groups=groups,
+        sessions=sessions,
         verbose=verbose,
     )
     fold_metrics_by_model, summary_df, oof_predictions = evaluation.report_cv(
@@ -245,6 +356,7 @@ def run_repeated_kfold_comparison(
     ensemble_name: str = 'ensemble',
     ensemble_weights: Optional[Sequence[float]] = None,
     groups: Optional[np.ndarray] = None,
+    sessions: Optional[np.ndarray] = None,
     verbose: bool = True,
 ) -> Tuple[Dict[str, list[dict]], pd.DataFrame]:
     if groups is not None:
@@ -259,6 +371,8 @@ def run_repeated_kfold_comparison(
         X = X.loc[mask].reset_index(drop=True)
         y = y.loc[mask].reset_index(drop=True)
         groups = groups[mask]
+        if sessions is not None:
+            sessions = np.asarray(sessions)[mask]
     else:
         X, y = _prepare_xy(X, y)
     seeds = DEFAULT_SEEDS
@@ -288,7 +402,9 @@ def run_repeated_kfold_comparison(
     _warn_nan_features(X, verbose)
     if verbose:
         extras = []
-        if groups is not None:
+        if sessions is not None:
+            extras.append(pas_split_summary(groups, sessions))
+        elif groups is not None:
             extras.append(
                 f'Split: GroupKFold by subject_ID '
                 f'({len(np.unique(groups))} unique subjects)'
@@ -332,6 +448,7 @@ def run_repeated_kfold_comparison(
         n_splits=n_splits,
         seeds=seeds,
         groups=groups,
+        sessions=sessions,
         verbose=verbose,
         fold_log=lambda metrics_by_model: ' | '.join(
             f'{name} MAE={metrics["mae"]:.4f}' for name, metrics in metrics_by_model.items()
@@ -355,8 +472,21 @@ def run_repeated_kfold_training(
     n_splits: int = 5,
     select_top_n: Optional[int] = None,
     groups: Optional[np.ndarray] = None,
+    sessions: Optional[np.ndarray] = None,
     verbose: bool = True,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    train_filter: Optional[Callable[[pd.DataFrame, pd.Series], np.ndarray]] = None,
+    return_fold_metrics: bool = False,
+) -> Union[Tuple[pd.DataFrame, pd.DataFrame], Tuple[pd.DataFrame, pd.DataFrame, list]]:
+    """Repeated k-fold CV.
+
+    ``train_filter`` receives the rows of the training fold and returns a boolean
+    keep-mask. Validation folds are never filtered, so metrics stay comparable to
+    an unfiltered run.
+
+    ``return_fold_metrics`` also returns the per-fold metric dicts, ordered
+    seed-major then fold. Splits depend only on y/groups/seed, so runs that differ
+    only in ``train_filter`` are directly comparable fold by fold.
+    """
     if groups is not None:
         groups = np.asarray(groups)
         if len(groups) != len(y):
@@ -369,6 +499,8 @@ def run_repeated_kfold_training(
         X = X.loc[mask].reset_index(drop=True)
         y = y.loc[mask].reset_index(drop=True)
         groups = groups[mask]
+        if sessions is not None:
+            sessions = np.asarray(sessions)[mask]
     else:
         X, y = _prepare_xy(X, y)
     seeds = DEFAULT_SEEDS
@@ -384,21 +516,41 @@ def run_repeated_kfold_training(
     selection_counts = np.zeros(len(feature_names), dtype=int) if track_importances else None
     importance_runs = 0
     n_runs = 0
+    train_rows_seen = 0
+    train_rows_kept = 0
 
     _warn_nan_features(X, verbose)
     if verbose:
         extras = []
-        if groups is not None:
+        if sessions is not None:
+            extras.append(pas_split_summary(groups, sessions))
+        elif groups is not None:
             extras.append(
                 f'Split: GroupKFold by subject_ID '
                 f'({len(np.unique(groups))} unique subjects)'
             )
+        if train_filter is not None:
+            extras.append('Train-fold filter: enabled (validation folds keep all rows)')
         if use_selection:
             extras.append(f'Feature selection: top {select_top_n} per fold (train-only ranking)')
         evaluation.print_cv_intro(y_values, n_splits, seeds, extra_lines=extras)
 
     def run_fold(train_index: np.ndarray, val_index: np.ndarray, seed: int) -> Dict[str, np.ndarray]:
         nonlocal accum, selection_counts, importance_runs, n_runs
+        nonlocal train_rows_seen, train_rows_kept
+
+        if train_filter is not None:
+            keep = np.asarray(train_filter(X.iloc[train_index], y.iloc[train_index]), dtype=bool)
+            if keep.shape != train_index.shape:
+                raise ValueError(
+                    f'train_filter returned {keep.shape} mask for '
+                    f'{train_index.shape} training rows'
+                )
+            if not keep.any():
+                raise ValueError('train_filter removed every row of a training fold')
+            train_rows_seen += len(train_index)
+            train_rows_kept += int(keep.sum())
+            train_index = train_index[keep]
 
         X_train, X_val = _split_impute_tabular(X, train_index, val_index)
         y_train = y.iloc[train_index]
@@ -437,6 +589,7 @@ def run_repeated_kfold_training(
         n_splits=n_splits,
         seeds=seeds,
         groups=groups,
+        sessions=sessions,
         verbose=verbose,
     )
     _, summary_df, oof_predictions = evaluation.report_cv(
@@ -456,6 +609,12 @@ def run_repeated_kfold_training(
         importance_df = pd.DataFrame(columns=['feature', 'importance'])
 
     if verbose:
+        if train_filter is not None and train_rows_seen > 0:
+            print(
+                f'\nTrain-fold filter kept {train_rows_kept / n_runs:.0f}/'
+                f'{train_rows_seen / n_runs:.0f} rows per fold '
+                f'({100.0 * train_rows_kept / train_rows_seen:.1f}%)'
+            )
         if use_selection:
             freq = pd.DataFrame({
                 'feature': list(feature_names),
@@ -475,4 +634,6 @@ def run_repeated_kfold_training(
             )
         evaluation.print_cv_results(summary_df, y_values, oof_predictions)
 
+    if return_fold_metrics:
+        return summary_df, importance_df, fold_metrics_by_model[model_name]
     return summary_df, importance_df
