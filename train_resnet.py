@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader
 import data_loader
 import utils
 from config import (
+    DEFAULT_SEEDS,
     DEFAULT_WINDOW_SECONDS,
     tensor_to_numpy,
     torch_device,
@@ -40,6 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
              'Default: 60 for vitaldb, full signal for other datasets. 0 = full signal.',
     )
     parser.add_argument('--n-splits', type=int, default=5)
+    parser.add_argument('--seeds', type=int, nargs='+', default=None)
     parser.add_argument('--max-samples', type=int, default=None, help='Use only the first N label files')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--epochs', type=int, default=25)
@@ -310,6 +312,7 @@ def main() -> None:
     window_seconds = (
         DEFAULT_WINDOW_SECONDS if args.window_seconds is None else args.window_seconds
     )
+    seeds = tuple(args.seeds) if args.seeds is not None else DEFAULT_SEEDS
     set_seed(args.seed)
     device = torch.device('cpu') if args.quick else torch_device()
 
@@ -400,6 +403,7 @@ def main() -> None:
         predict_fold,
         model_name='resnet34',
         n_splits=args.n_splits,
+        seeds=seeds,
         groups=cv_groups,
     )
 
