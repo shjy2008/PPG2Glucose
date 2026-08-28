@@ -2,41 +2,27 @@
 
 Code for the paper. Three models, five evaluation protocols, three datasets.
 
-| Model | Script | Input |
-| --- | --- | --- |
-| TinyML ([Zeynali et al., 2025](https://doi.org/10.1038/s41598-024-84265-8)) | `train_resnet.py` | raw PPG |
-| CBHFF ([Ali et al., 2025](https://ieeexplore.ieee.org/document/10684156)) | `train_cbhff.py` | raw PPG |
-| CatBoost | `train_catboost.py` | handcrafted PPG + demographics |
 
-Targets are **mmol/L** (MUST / VitalDB mg/dL labels are divided by 18).
+| Model                                                                       | Script              | Input                          |
+| --------------------------------------------------------------------------- | ------------------- | ------------------------------ |
+| TinyML ([Zeynali et al., 2025](https://doi.org/10.1038/s41598-024-84265-8)) | `train_resnet.py`   | raw PPG                        |
+| CBHFF ([Ali et al., 2025](https://ieeexplore.ieee.org/document/10684156))   | `train_cbhff.py`    | raw PPG                        |
+| CatBoost                                                                    | `train_catboost.py` | handcrafted PPG + demographics |
+
 
 ```bash
 pip install -r requirements.txt   # Python 3.10+
 ```
 
-GPU: set `USE_GPU = True` in `config.py` (default CPU). Table 5 is 5-fold × 5 seeds (`42, 52, 62, 72, 82`). After changing `config.py`, pass `--refresh-cache`.
+CPU by default. For GPU, set `USE_GPU = True` in `config.py`.
 
 ## Data
 
-IPS-PPG is `--dataset IPS` (private). MUST and VitalDB cover the public experiments.
+- **MUST** — [Mendeley](https://data.mendeley.com/datasets/37pm7jk7jn/3) into `dataset/MUST/`
+- **VitalDB** — `python download_vitaldb.py --output-dir dataset/vitaldb --window-seconds 60`
+- **IPS-PPG** — private; `--dataset IPS`
 
-| Paper | `--dataset` | Get it |
-| --- | --- | --- |
-| MUST | `MUST` | [Mendeley](https://data.mendeley.com/datasets/37pm7jk7jn/3) → `dataset/MUST/{Labels,RawData}/` (`label_*.csv`, `signal_*.csv`) |
-| VitalDB | `vitaldb` | `python download_vitaldb.py --output-dir dataset/vitaldb_16min --window-seconds 960` (resumable; train-time crop is 60 s) |
-| IPS-PPG | `IPS` | `dataset/IPS/bg_re.xlsx` + `ppg/{id}.txt` |
 
-## Protocols
-
-| Paper | Flags |
-| --- | --- |
-| RTTS | `--sample-wise --window-seconds W` |
-| STTS | `--window-seconds W` (CatBoost: also `--subject-wise`) |
-| PAS | `--pas` (MUST and VitalDB only) |
-| LSPO | CatBoost: `--subject-wise`; TinyML / CBHFF: default |
-| OOD | `train_*_cross.py --train-dataset A --test-dataset B` |
-
-`W=1` on MUST, `W=10` on VitalDB and IPS-PPG. PAS / LSPO / OOD do not window.
 
 ## Table 5 (within-dataset)
 
@@ -66,6 +52,8 @@ python train_cbhff.py    --dataset vitaldb
 python train_catboost.py --dataset vitaldb --subject-wise
 ```
 
+
+
 ### MUST
 
 ```bash
@@ -90,6 +78,8 @@ python train_cbhff.py    --dataset MUST
 python train_catboost.py --dataset MUST --subject-wise
 ```
 
+
+
 ### IPS-PPG
 
 PAS is blank in the paper (one recording per person).
@@ -110,6 +100,8 @@ python train_resnet.py   --dataset IPS
 python train_cbhff.py    --dataset IPS
 python train_catboost.py --dataset IPS --subject-wise
 ```
+
+
 
 ## Table 6 (OOD)
 

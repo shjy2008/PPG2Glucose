@@ -6,8 +6,11 @@ waveform_cache/
 .cache/
 
 # datasets
-dataset/
-!/dataset/southwest
+# dataset/
+dataset/IPS
+dataset/ieb
+# dataset/vitaldb
+dataset/vitaldb_*
 
 .vscode
 .DS_Store
