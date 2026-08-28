@@ -20,7 +20,7 @@ RESULTS_PATH = Path('results/catboost_best_params.json')
 
 def build_parser():
     p = argparse.ArgumentParser(description='Tune CatBoost hyperparameters with Optuna.')
-    p.add_argument('--dataset', default='southwest', help='southwest, MUST, or dataset path')
+    p.add_argument('--dataset', default='IPS', help='IPS, MUST, or dataset path')
     p.add_argument('--n-trials', type=int, default=50, help='Number of Optuna trials')
     p.add_argument('--n-splits', type=int, default=5, help='CV folds per trial')
     return p

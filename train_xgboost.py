@@ -9,7 +9,7 @@ from config import xgboost_kwargs
 
 def build_parser():
     p = argparse.ArgumentParser()
-    p.add_argument('--dataset', default='southwest', help='southwest, MUST, or vitaldb')
+    p.add_argument('--dataset', default='IPS', help='IPS, MUST, or vitaldb')
     p.add_argument('--n-splits', type=int, default=5)
     p.add_argument('--max-samples', type=int, default=None, help='Use only the first N label files')
     p.add_argument('--top', type=int, default=10, help='Number of top features to print')

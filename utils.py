@@ -173,7 +173,7 @@ def iter_pas_splits(
     if not multi:
         raise ValueError(
             'PAS needs subjects with 2+ sessions. This dataset has one recording '
-            'per person (e.g. southwest / IPS-PPG).'
+            'per person (e.g. IPS).'
         )
 
     rng = np.random.RandomState(seed)

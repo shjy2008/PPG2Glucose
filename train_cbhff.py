@@ -1,8 +1,8 @@
-"""Train Ali et al. CBHFF (JBHI 2025) on southwest / MUST / vitaldb.
+"""Train Ali et al. CBHFF (JBHI 2025) on IPS / MUST / vitaldb.
 
-  python train_cbhff.py --dataset southwest
-  python train_cbhff.py --dataset southwest --sample-wise --window-seconds 15
-  python train_cbhff.py --dataset southwest --include-basic
+  python train_cbhff.py --dataset IPS
+  python train_cbhff.py --dataset IPS --sample-wise --window-seconds 15
+  python train_cbhff.py --dataset IPS --include-basic
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ from waveform_train import (
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description='Train CBHFF PPG→glucose regressor')
-    p.add_argument('--dataset', default='southwest')
+    p.add_argument('--dataset', default='IPS')
     p.add_argument('--ppg-seconds', type=float, default=None)
     p.add_argument('--n-splits', type=int, default=5)
     p.add_argument('--seeds', type=int, nargs='+', default=None)

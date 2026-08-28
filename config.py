@@ -13,14 +13,14 @@ _VITALDB_16MIN_ROOT = Path(
     os.environ.get('VITALDB_16MIN_DIR', 'dataset/vitaldb_16min')
 )
 DATASET_ROOTS = {
-    'southwest': Path('dataset/southwest'),
+    'IPS': Path('dataset/IPS'),
     'MUST': Path('dataset/MUST'),
     'vitaldb': _VITALDB_16MIN_ROOT,
 }
 
 # Config profile used for PPG/demographics when the CLI name is an alias/path.
 DATASET_CONFIG_PROFILE = {
-    'southwest': 'southwest',
+    'IPS': 'IPS',
     'MUST': 'MUST',
     'vitaldb': 'vitaldb',
 }
@@ -32,7 +32,7 @@ DEFAULT_VITALDB_PPG_SECONDS = 60.0
 # Options: (), ('age',), ('age', 'bmi'), ('age', 'height', 'weight'),
 # ('sex', 'age', 'height', 'weight'), ('age', 'height', 'weight', 'bmi')
 BASIC_FEATURE_KEYS = {
-    'southwest': ('age', 'height', 'weight', 'bmi'),
+    'IPS': ('age', 'height', 'weight', 'bmi'),
     # MUST: age+weight + g3-g6; with CatBoost depth=4 → MAE 0.7075, R2 +0.0003.
     # (depth=3 was MAE 0.7109 / R2 -0.0140; age-only baseline MAE 0.7119 / R2 -0.0182)
     'MUST': ('age', 'weight'),
@@ -46,7 +46,7 @@ DEFAULT_SEEDS = (42, 52, 62, 72, 82)
 # PPG sampling rate (Hz) used for frequency-domain and heart-rate features.
 PPG_SAMPLING_RATE = {
     'MUST': 2175,
-    'southwest': 200,
+    'IPS': 200,
     'vitaldb': 500,
 }
 DEFAULT_PPG_SAMPLING_RATE = 200
@@ -56,7 +56,7 @@ DEFAULT_PPG_SAMPLING_RATE = 200
 # MUST downsample-only 2175→100 Hz raised MAE 0.7311 → 0.7633.
 PPG_TARGET_FS = {
     'MUST': None,  # 100.0
-    'southwest': None,
+    'IPS': None,
     'vitaldb': None,
 }
 DEFAULT_PPG_TARGET_FS = None
@@ -75,7 +75,7 @@ PPG_FEATURE_GROUPS = {
         'g5',
         'g6',
         ),
-    'southwest': DEFAULT_PPG_FEATURE_GROUPS,
+    'IPS': DEFAULT_PPG_FEATURE_GROUPS,
     'vitaldb': DEFAULT_PPG_FEATURE_GROUPS,
 }
 
@@ -85,21 +85,21 @@ DEFAULT_WINDOW_SECONDS = 0.0
 # Fractions trimmed from each dataset's PPG signals before feature extraction.
 PPG_TRIM_FRACTIONS = {
     'MUST': (0.0, 0.0),
-    'southwest': (0.1, 0.0),
+    'IPS': (0.1, 0.0),
     'vitaldb': (0.0, 0.0),
 }
 DEFAULT_PPG_TRIM_FRACTIONS = (0.0, 0.0)
 
 # PPG time-domain filter applied after trim, before feature extraction.
 # Options: 'none', 'mswf' (Chen et al. JBHI 2024 multi-size weighted fitting).
-# Try-1 southwest CatBoost: mswf raised MAE 0.5785 → 0.6119, so default off.
+# Try-1 IPS CatBoost: mswf raised MAE 0.5785 → 0.6119, so default off.
 # MUST CatBoost ablation (subject-wise 5x5 CV, baseline MAE 0.7311):
 # target_fs=100 only 0.7633; mswf only 0.7964; combined 0.7950. Keep both off.
 # Try-4 MUST: fs-aware physiological feature units (IBI/lag in seconds, cardiac
 # bands 0.5–4 Hz, rate-normalized derivatives) → MAE 0.7468 (no gain). Keep fixes.
 PPG_FILTER = {
     'MUST': 'none',
-    'southwest': 'none',
+    'IPS': 'none',
     'vitaldb': 'none',
 }
 DEFAULT_PPG_FILTER = 'none'
@@ -109,7 +109,7 @@ DEFAULT_PPG_FILTER = 'none'
 # MUST 4 s window / 1 s hop raised CatBoost MAE 0.7311 → 0.7685, so default off.
 PPG_BEST_SEGMENT_SECONDS = {
     'MUST': None,  # 4.0
-    'southwest': None,
+    'IPS': None,
     'vitaldb': None,
 }
 DEFAULT_PPG_BEST_SEGMENT_SECONDS = None
@@ -117,10 +117,10 @@ PPG_BEST_SEGMENT_HOP_SECONDS = 1.0
 
 # Skewness-based SSQI threshold (Chen et al. JBHI 2024). None disables SQA.
 # Accept 6 s windows with SSQI > threshold, then concatenate for full-signal features.
-# Try-2 southwest CatBoost: sqa=0.3 kept 191/252, MAE 0.5785 → 0.6001, so default off.
+# Try-2 IPS CatBoost: sqa=0.3 kept 191/252, MAE 0.5785 → 0.6001, so default off.
 PPG_SQA_THRESHOLD = {
     'MUST': None, # 0.3
-    'southwest': None,
+    'IPS': None,
     'vitaldb': None,
 }
 DEFAULT_PPG_SQA_THRESHOLD = None
@@ -134,9 +134,9 @@ TARGET_OUTLIER_UPPER_Q = 1
 
 
 def resolve_config_dataset(dataset: str | Path | None) -> str:
-    """Map CLI dataset name/path to a settings profile (vitaldb/MUST/southwest)."""
+    """Map CLI dataset name/path to a settings profile (vitaldb/MUST/IPS)."""
     if dataset is None:
-        return 'southwest'
+        return 'IPS'
     raw = str(dataset)
     name = Path(raw).name
     if raw in DATASET_CONFIG_PROFILE:
@@ -150,8 +150,8 @@ def resolve_config_dataset(dataset: str | Path | None) -> str:
         return 'vitaldb'
     if lower_name == 'must' or '/must/' in f'/{lower_path}/':
         return 'MUST'
-    if lower_name.startswith('southwest') or '/southwest' in lower_path:
-        return 'southwest'
+    if lower_name.startswith('ips') or '/ips' in lower_path:
+        return 'IPS'
 
     root = Path(raw)
     if not root.is_absolute():
@@ -162,7 +162,7 @@ def resolve_config_dataset(dataset: str | Path | None) -> str:
         if (root / 'Labels').is_dir() and (root / 'RawData').is_dir():
             return 'MUST'
         if (root / 'bg_re.xlsx').is_file():
-            return 'southwest'
+            return 'IPS'
     return raw
 
 

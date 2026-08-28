@@ -10,7 +10,7 @@ import utils
 
 def build_parser():
     p = argparse.ArgumentParser()
-    p.add_argument('--dataset', default='southwest', help='southwest or MUST')
+    p.add_argument('--dataset', default='IPS', help='IPS or MUST')
     p.add_argument('--n-splits', type=int, default=5)
     return p
 

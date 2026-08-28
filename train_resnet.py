@@ -30,8 +30,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description='Train a 1D ResNet-34 PPG regressor')
     parser.add_argument(
         '--dataset',
-        default='southwest',
-        help='southwest, MUST, vitaldb (16 min files under dataset/vitaldb_16min), or a path',
+        default='IPS',
+        help='IPS, MUST, vitaldb (16 min files under dataset/vitaldb_16min), or a path',
     )
     parser.add_argument(
         '--ppg-seconds',

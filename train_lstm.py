@@ -13,7 +13,7 @@ from config import torch_device
 
 def build_parser():
     p = argparse.ArgumentParser()
-    p.add_argument('--dataset', default='southwest', help='southwest or MUST')
+    p.add_argument('--dataset', default='IPS', help='IPS or MUST')
     p.add_argument('--n-splits', type=int, default=5)
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--epochs', type=int, default=20)

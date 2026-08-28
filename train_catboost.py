@@ -36,7 +36,7 @@ DEFAULT_PARAMS = {
 
 # Dataset-specific overrides; edit these independently after tuning each dataset.
 DATASET_PARAMS = {
-    'southwest': {'depth': 4,},
+    'IPS': {'depth': 4,},
     # MUST: depth 3 → 4 with age+weight + g3-g6: MAE 0.7109 → 0.7075, R2 -0.0140 → +0.0003.
     'MUST': {
         # 'iterations': 500,
@@ -50,8 +50,8 @@ def build_parser():
     p = argparse.ArgumentParser()
     p.add_argument(
         '--dataset',
-        default='southwest',
-        help='southwest, MUST, vitaldb (16 min files under dataset/vitaldb_16min), or a path',
+        default='IPS',
+        help='IPS, MUST, vitaldb (16 min files under dataset/vitaldb_16min), or a path',
     )
     p.add_argument(
         '--ppg-seconds',

@@ -250,9 +250,9 @@ def _attach_labels_rawdata_basic(
     return merged.loc[:, id_cols + list(keys) + ppg_cols].reset_index(drop=True)
 
 
-def _attach_southwest_basic(df: pd.DataFrame, root: Path) -> pd.DataFrame:
+def _attach_IPS_basic(df: pd.DataFrame, root: Path) -> pd.DataFrame:
     out = _ppg_only_frame(df)
-    keys = basic_feature_keys('southwest')
+    keys = basic_feature_keys('IPS')
     if not keys:
         return out.reset_index(drop=True)
 
@@ -345,7 +345,7 @@ def resolve_dataset_root(dataset: str | Path | None = None) -> Path:
     from config import DATASET_ROOTS
 
     if dataset is None:
-        dataset = 'southwest'
+        dataset = 'IPS'
     if isinstance(dataset, Path):
         root = dataset
     elif str(dataset) in DATASET_ROOTS:
@@ -363,10 +363,10 @@ def dataset_layout(root: Path) -> str:
     if (root / 'Labels').is_dir() and (root / 'RawData').is_dir():
         return 'MUST'
     if (root / 'bg_re.xlsx').is_file() and (root / 'ppg').is_dir():
-        return 'southwest'
+        return 'IPS'
     raise RuntimeError(
         f'Unrecognized dataset layout under {root}. '
-        'Expected vitaldb/MUST (Labels/ + RawData/) or southwest (bg_re.xlsx + ppg/).'
+        'Expected vitaldb/MUST (Labels/ + RawData/) or IPS (bg_re.xlsx + ppg/).'
     )
 
 
@@ -418,7 +418,7 @@ def load_dataset(
             refresh_cache=refresh_cache,
             ppg_seconds=ppg_seconds,
         )
-    return _load_southwest_dataset(
+    return _load_IPS_dataset(
         root,
         window_seconds=window_seconds,
         max_samples=max_samples,
@@ -534,7 +534,7 @@ def _load_labels_rawdata_dataset(
     return _attach_labels_rawdata_basic(dataset, labels_dir, dataset_name)
 
 
-def _load_southwest_dataset(
+def _load_IPS_dataset(
     root: Path,
     window_seconds: float = DEFAULT_WINDOW_SECONDS,
     max_samples: int | None = None,
@@ -550,18 +550,18 @@ def _load_southwest_dataset(
         'bg_re_mtime': round((root / 'bg_re.xlsx').stat().st_mtime, 3),
     }
     fingerprint = _ppg_cache_fingerprint(
-        'southwest',
+        'IPS',
         window_seconds,
         max_samples,
         identity,
         center_window_seconds=center_seconds,
     )
-    cache_path = _feature_cache_path('southwest', fingerprint)
+    cache_path = _feature_cache_path('IPS', fingerprint)
     cached = _try_load_feature_cache(
-        cache_path, refresh_cache, fingerprint=fingerprint, dataset_name='southwest'
+        cache_path, refresh_cache, fingerprint=fingerprint, dataset_name='IPS'
     )
     if cached is not None:
-        return _attach_southwest_basic(cached, root)
+        return _attach_IPS_basic(cached, root)
 
     metadata = pd.read_excel(root / 'bg_re.xlsx', sheet_name=0, header=1)
     rows = metadata[metadata['subject_ID'].notna()]
@@ -570,9 +570,9 @@ def _load_southwest_dataset(
         print(f'Limited to {len(rows)} sample(s)')
 
     if center_seconds:
-        print(f'Center-cropping PPG to {center_seconds:g} s (southwest)')
+        print(f'Center-cropping PPG to {center_seconds:g} s (IPS)')
     else:
-        print('Using full on-disk PPG signal (southwest)')
+        print('Using full on-disk PPG signal (IPS)')
 
     records = []
     for _, row in rows.iterrows():
@@ -590,9 +590,9 @@ def _load_southwest_dataset(
 
         feature_dicts = _ppg_feature_dicts(
             signal_path,
-            fs=ppg_sampling_rate('southwest'),
+            fs=ppg_sampling_rate('IPS'),
             window_seconds=window_seconds,
-            dataset_name='southwest',
+            dataset_name='IPS',
             center_window_seconds=center_seconds,
         )
         if not feature_dicts:
@@ -620,7 +620,7 @@ def _load_southwest_dataset(
         )
     dataset = pd.DataFrame(records)
     _save_feature_cache(cache_path, dataset, fingerprint)
-    return _attach_southwest_basic(dataset, root)
+    return _attach_IPS_basic(dataset, root)
 
 
 def _resize_waveform(waveform: np.ndarray, target_length: int, resample: bool) -> np.ndarray:
@@ -723,7 +723,7 @@ def load_waveform_dataset(
                 cache_path, signals, demographics, targets, groups, sessions, fingerprint
             )
         else:
-            signals, demographics, targets, groups, sessions = _load_southwest_waveform_dataset(
+            signals, demographics, targets, groups, sessions = _load_IPS_waveform_dataset(
                 root,
                 signal_length=signal_length,
                 include_basic=include_basic,
@@ -856,7 +856,7 @@ def _load_labels_rawdata_waveform_dataset(
     )
 
 
-def _load_southwest_waveform_dataset(
+def _load_IPS_waveform_dataset(
     root: Path,
     signal_length: int = 0,
     include_basic: bool = True,
@@ -867,9 +867,9 @@ def _load_southwest_waveform_dataset(
     metadata = pd.read_excel(root / 'bg_re.xlsx', sheet_name=0, header=1)
     center_seconds = resolve_ppg_center_window_seconds(ppg_seconds)
     if center_seconds:
-        print(f'Center-cropping PPG to {center_seconds:g} s (southwest)')
+        print(f'Center-cropping PPG to {center_seconds:g} s (IPS)')
     else:
-        print('Using full on-disk PPG signal (southwest)')
+        print('Using full on-disk PPG signal (IPS)')
     pending = []
     lengths = []
     for _, row in metadata[metadata['subject_ID'].notna()].iterrows():
@@ -886,7 +886,7 @@ def _load_southwest_waveform_dataset(
             continue
 
         if include_basic:
-            keys = basic_feature_keys('southwest')
+            keys = basic_feature_keys('IPS')
             basic_info_dict = extract_basic_info(row, keys)
             if keys and not basic_info_dict:
                 continue
@@ -899,10 +899,10 @@ def _load_southwest_waveform_dataset(
 
         waveform = read_signal_waveform(
             signal_path,
-            trim_fractions=ppg_trim_fractions('southwest'),
-            fs=ppg_sampling_rate('southwest'),
-            filter_name=ppg_filter('southwest'),
-            target_fs=ppg_target_fs('southwest'),
+            trim_fractions=ppg_trim_fractions('IPS'),
+            fs=ppg_sampling_rate('IPS'),
+            filter_name=ppg_filter('IPS'),
+            target_fs=ppg_target_fs('IPS'),
             center_window_seconds=center_seconds,
         ).astype(np.float32, copy=False)
         if waveform.size == 0:
@@ -1014,7 +1014,7 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', default='MUST', help='MUST, vitaldb, or southwest')
+    parser.add_argument('--dataset', default='MUST', help='MUST, vitaldb, or IPS')
     cli_args = parser.parse_args()
 
     ds = load_dataset(cli_args.dataset)

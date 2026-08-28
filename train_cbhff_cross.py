@@ -1,8 +1,8 @@
 """Train CBHFF on one PPG dataset, test on another (paper OOD).
 
   python train_cbhff_cross.py
-  python train_cbhff_cross.py --train-dataset MUST --test-dataset southwest
-  python train_cbhff_cross.py --train-dataset southwest --test-dataset vitaldb
+  python train_cbhff_cross.py --train-dataset MUST --test-dataset IPS
+  python train_cbhff_cross.py --train-dataset IPS --test-dataset vitaldb
   python train_cbhff_cross.py --quick --max-samples 32
 """
 
