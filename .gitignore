@@ -2,6 +2,7 @@
 __pycache__/
 catboost_info/
 feature_cache/
+waveform_cache/
 .cache/
 
 # datasets
@@ -19,6 +20,3 @@ seg_error_grid.png
 
 # documents
 papers/
-
-# public code
-TinyML_code/
