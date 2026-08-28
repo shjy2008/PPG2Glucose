@@ -1,0 +1,15 @@
+{
+  "dataset": "vitaldb",
+  "ppg_track": "SNUADC/PLETH",
+  "source_fs_hz": 500.0,
+  "target_fs_hz": 500.0,
+  "window_seconds": 60.0,
+  "cases_written": 3097,
+  "samples_written": 7506,
+  "skipped_cases": 0,
+  "cases_skipped_existing": 0,
+  "samples_skipped_existing": 0,
+  "overwrite": false,
+  "interrupted": false,
+  "glucose_unit": "mg/dL"
+}
