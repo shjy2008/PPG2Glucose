@@ -20,3 +20,9 @@ seg_error_grid.png
 
 # documents
 papers/
+
+# TinyML code
+TinyML_code/
+!TinyML_code/resnet.py
+
+.mplconfig/
