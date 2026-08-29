@@ -3,11 +3,11 @@
 Code for the paper. Three models, five evaluation protocols, three datasets.
 
 
-| Model                                                                       | Script              | Input                          |
-| --------------------------------------------------------------------------- | ------------------- | ------------------------------ |
-| TinyML ([Zeynali et al., 2025](https://doi.org/10.1038/s41598-024-84265-8)) | `train_resnet.py`   | raw PPG                        |
-| CBHFF ([Ali et al., 2025](https://ieeexplore.ieee.org/document/10684156))   | `train_cbhff.py`    | raw PPG                        |
-| CatBoost                                                                    | `train_catboost.py` | handcrafted PPG + demographics |
+| Model                                                                         | Script              | Input                          |
+| ----------------------------------------------------------------------------- | ------------------- | ------------------------------ |
+| ResNet34 ([Zeynali et al., 2025](https://doi.org/10.1038/s41598-024-84265-8)) | `train_resnet.py`   | raw PPG                        |
+| CBHFF ([Ali et al., 2025](https://ieeexplore.ieee.org/document/10684156))     | `train_cbhff.py`    | raw PPG                        |
+| CatBoost                                                                      | `train_catboost.py` | handcrafted PPG + demographics |
 
 
 ```bash
@@ -18,94 +18,82 @@ CPU by default. For GPU, set `USE_GPU = True` in `config.py`.
 
 ## Data
 
-- **MUST** — [Mendeley](https://data.mendeley.com/datasets/37pm7jk7jn/3) into `dataset/MUST/`
 - **VitalDB** — `python download_vitaldb.py --output-dir dataset/vitaldb --window-seconds 60`
+- **MUST** — [Mendeley](https://data.mendeley.com/datasets/37pm7jk7jn/3) into `dataset/MUST/`
 - **IPS-PPG** — private; `--dataset IPS`
-
-
 
 ## Table 5 (within-dataset)
 
-Each block is TinyML, CBHFF, CatBoost — the same order as the paper.
+Same order as the paper: dataset → ResNet34, CBHFF, CatBoost → RTTS, RTTS (subject-wise), PAS, LSPO.
 
 ### VitalDB
 
 ```bash
-# RTTS
-python train_resnet.py   --dataset vitaldb --sample-wise --window-seconds 10
-python train_cbhff.py    --dataset vitaldb --sample-wise --window-seconds 10
-python train_catboost.py --dataset vitaldb --sample-wise --window-seconds 10
+# ResNet34
+python train_resnet.py   --dataset vitaldb --sample-wise --window-seconds 10   # RTTS
+python train_resnet.py   --dataset vitaldb --window-seconds 10                # STTS
+python train_resnet.py   --dataset vitaldb --pas                              # PAS
+python train_resnet.py   --dataset vitaldb                                    # LSPO
 
-# STTS
-python train_resnet.py   --dataset vitaldb --window-seconds 10
-python train_cbhff.py    --dataset vitaldb --window-seconds 10
-python train_catboost.py --dataset vitaldb --subject-wise --window-seconds 10
+# CBHFF
+python train_cbhff.py    --dataset vitaldb --sample-wise --window-seconds 10   # RTTS
+python train_cbhff.py    --dataset vitaldb --window-seconds 10                # STTS
+python train_cbhff.py    --dataset vitaldb --pas                              # PAS
+python train_cbhff.py    --dataset vitaldb                                    # LSPO
 
-# PAS
-python train_resnet.py   --dataset vitaldb --pas
-python train_cbhff.py    --dataset vitaldb --pas
-python train_catboost.py --dataset vitaldb --pas
-
-# LSPO
-python train_resnet.py   --dataset vitaldb
-python train_cbhff.py    --dataset vitaldb
-python train_catboost.py --dataset vitaldb --subject-wise
+# CatBoost
+python train_catboost.py --dataset vitaldb --sample-wise --window-seconds 10   # RTTS
+python train_catboost.py --dataset vitaldb --subject-wise --window-seconds 10 # STTS
+python train_catboost.py --dataset vitaldb --pas                              # PAS
+python train_catboost.py --dataset vitaldb --subject-wise                     # LSPO
 ```
-
-
 
 ### MUST
 
 ```bash
-# RTTS
-python train_resnet.py   --dataset MUST --sample-wise --window-seconds 1
-python train_cbhff.py    --dataset MUST --sample-wise --window-seconds 1
-python train_catboost.py --dataset MUST --sample-wise --window-seconds 1
+# ResNet34
+python train_resnet.py   --dataset MUST --sample-wise --window-seconds 1   # RTTS
+python train_resnet.py   --dataset MUST --window-seconds 1                # STTS
+python train_resnet.py   --dataset MUST --pas                             # PAS
+python train_resnet.py   --dataset MUST                                   # LSPO
 
-# STTS
-python train_resnet.py   --dataset MUST --window-seconds 1
-python train_cbhff.py    --dataset MUST --window-seconds 1
-python train_catboost.py --dataset MUST --subject-wise --window-seconds 1
+# CBHFF
+python train_cbhff.py    --dataset MUST --sample-wise --window-seconds 1   # RTTS
+python train_cbhff.py    --dataset MUST --window-seconds 1                # STTS
+python train_cbhff.py    --dataset MUST --pas                             # PAS
+python train_cbhff.py    --dataset MUST                                   # LSPO
 
-# PAS
-python train_resnet.py   --dataset MUST --pas
-python train_cbhff.py    --dataset MUST --pas
-python train_catboost.py --dataset MUST --pas
-
-# LSPO
-python train_resnet.py   --dataset MUST
-python train_cbhff.py    --dataset MUST
-python train_catboost.py --dataset MUST --subject-wise
+# CatBoost
+python train_catboost.py --dataset MUST --sample-wise --window-seconds 1   # RTTS
+python train_catboost.py --dataset MUST --subject-wise --window-seconds 1 # STTS
+python train_catboost.py --dataset MUST --pas                             # PAS
+python train_catboost.py --dataset MUST --subject-wise                    # LSPO
 ```
-
-
 
 ### IPS-PPG
 
-PAS is blank in the paper (one recording per person).
+PAS is `/` in the paper (one recording per person).
 
 ```bash
-# RTTS
-python train_resnet.py   --dataset IPS --sample-wise --window-seconds 10
-python train_cbhff.py    --dataset IPS --sample-wise --window-seconds 10
-python train_catboost.py --dataset IPS --sample-wise --window-seconds 10
+# ResNet34
+python train_resnet.py   --dataset IPS --sample-wise --window-seconds 10   # RTTS
+python train_resnet.py   --dataset IPS --window-seconds 10                # STTS
+python train_resnet.py   --dataset IPS                                    # LSPO
 
-# STTS
-python train_resnet.py   --dataset IPS --window-seconds 10
-python train_cbhff.py    --dataset IPS --window-seconds 10
-python train_catboost.py --dataset IPS --subject-wise --window-seconds 10
+# CBHFF
+python train_cbhff.py    --dataset IPS --sample-wise --window-seconds 10   # RTTS
+python train_cbhff.py    --dataset IPS --window-seconds 10                # STTS
+python train_cbhff.py    --dataset IPS                                    # LSPO
 
-# LSPO
-python train_resnet.py   --dataset IPS
-python train_cbhff.py    --dataset IPS
-python train_catboost.py --dataset IPS --subject-wise
+# CatBoost
+python train_catboost.py --dataset IPS --sample-wise --window-seconds 10   # RTTS
+python train_catboost.py --dataset IPS --subject-wise --window-seconds 10 # STTS
+python train_catboost.py --dataset IPS --subject-wise                     # LSPO
 ```
-
-
 
 ## Table 6 (OOD)
 
-Order is TinyML, CBHFF, CatBoost.
+Order is ResNet34, CBHFF, CatBoost.
 
 ```bash
 # VitalDB → MUST
