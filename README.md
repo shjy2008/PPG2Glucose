@@ -105,7 +105,7 @@ python train_catboost.py --dataset IPS --subject-wise
 
 ## Table 6 (OOD)
 
-MUST is not used as a training source. Order is TinyML, CBHFF, CatBoost.
+Order is TinyML, CBHFF, CatBoost.
 
 ```bash
 # VitalDB → MUST
@@ -127,6 +127,16 @@ python train_catboost_cross.py --train-dataset vitaldb --test-dataset IPS
 python train_resnet_cross.py   --train-dataset IPS --test-dataset vitaldb
 python train_cbhff_cross.py    --train-dataset IPS --test-dataset vitaldb
 python train_catboost_cross.py --train-dataset IPS --test-dataset vitaldb
+
+# MUST → IPS-PPG
+python train_resnet_cross.py   --train-dataset MUST --test-dataset IPS
+python train_cbhff_cross.py    --train-dataset MUST --test-dataset IPS
+python train_catboost_cross.py --train-dataset MUST --test-dataset IPS
+
+# MUST → VitalDB
+python train_resnet_cross.py   --train-dataset MUST --test-dataset vitaldb
+python train_cbhff_cross.py    --train-dataset MUST --test-dataset vitaldb
+python train_catboost_cross.py --train-dataset MUST --test-dataset vitaldb
 ```
 
 Smoke test: `python train_resnet.py --dataset MUST --quick --max-samples 16`
