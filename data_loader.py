@@ -160,8 +160,45 @@ def _ppg_only_frame(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop(columns=drop) if drop else df
 
 
+# Keys added after some caches were written. Missing meta values mean these defaults.
+_FINGERPRINT_OPTIONAL_DEFAULTS = {
+    'ppg_center_window_seconds': None,
+    'ppg_csv_column': None,
+}
+
+
 def _fingerprint_without_demos(meta: dict) -> dict:
-    return {k: v for k, v in meta.items() if k != 'basic_feature_keys'}
+    out = {k: v for k, v in meta.items() if k != 'basic_feature_keys'}
+    for key, default in _FINGERPRINT_OPTIONAL_DEFAULTS.items():
+        out.setdefault(key, default)
+    return out
+
+
+def _manifest_window_seconds(labels_dir: Path) -> float | None:
+    manifest = labels_dir.parent / 'manifest.json'
+    if not manifest.is_file():
+        return None
+    try:
+        data = json.loads(manifest.read_text(encoding='utf-8'))
+    except (OSError, json.JSONDecodeError):
+        return None
+    value = data.get('window_seconds')
+    if value is None:
+        return None
+    return float(value)
+
+
+def _effective_center_seconds(
+    center_seconds: float | None,
+    labels_dir: Path,
+) -> float | None:
+    """Treat a crop as a no-op when on-disk windows are already that short."""
+    if center_seconds is None:
+        return None
+    on_disk = _manifest_window_seconds(labels_dir)
+    if on_disk is not None and on_disk <= float(center_seconds) + 1e-6:
+        return None
+    return center_seconds
 
 
 def _try_load_feature_cache(
@@ -456,7 +493,10 @@ def _load_labels_rawdata_dataset(
     if not label_files:
         raise RuntimeError(f'No label files found in {labels_dir}')
 
-    center_seconds = resolve_ppg_center_window_seconds(ppg_seconds)
+    center_seconds = _effective_center_seconds(
+        resolve_ppg_center_window_seconds(ppg_seconds),
+        labels_dir,
+    )
     identity = {
         'n_label_files': len(label_files),
         'max_label_mtime': round(max(p.stat().st_mtime for p in label_files), 3),

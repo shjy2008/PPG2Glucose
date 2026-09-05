@@ -31,7 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         '--dataset',
         default='IPS',
-        help='IPS, MUST, vitaldb (16 min files under dataset/vitaldb_16min), or a path',
+        help='IPS, MUST, vitaldb (dataset/vitaldb), or a path',
     )
     parser.add_argument(
         '--ppg-seconds',

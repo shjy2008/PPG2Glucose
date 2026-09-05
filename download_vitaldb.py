@@ -7,7 +7,7 @@ the same Labels/ + RawData/ layout as MUST so existing training scripts can
 consume the dataset with ``--dataset vitaldb``.
 """
 
-# python download_vitaldb.py   --output-dir dataset/vitaldb_16min   --window-seconds 960
+# python download_vitaldb.py --output-dir dataset/vitaldb --window-seconds 60
 
 from __future__ import annotations
 

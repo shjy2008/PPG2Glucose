@@ -8,14 +8,12 @@ from pathlib import Path
 USE_GPU = False
 
 # Named dataset roots. Edit paths per machine, or override with env vars.
-# --dataset vitaldb loads these 16 min files; crop with --ppg-seconds (default 60).
-_VITALDB_16MIN_ROOT = Path(
-    os.environ.get('VITALDB_16MIN_DIR', 'dataset/vitaldb_16min')
-)
+# --dataset vitaldb loads dataset/vitaldb (60 s windows from download_vitaldb.py).
+_VITALDB_ROOT = Path(os.environ.get('VITALDB_DIR', 'dataset/vitaldb'))
 DATASET_ROOTS = {
     'IPS': Path('dataset/IPS'),
     'MUST': Path('dataset/MUST'),
-    'vitaldb': _VITALDB_16MIN_ROOT,
+    'vitaldb': _VITALDB_ROOT,
     'Hb_PPG': Path('dataset/Hb_PPG_Dataset'),
 }
 
