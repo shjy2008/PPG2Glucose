@@ -49,6 +49,26 @@ def _feature_cache_path(dataset_name: str, fingerprint: dict) -> Path:
     return FEATURE_CACHE_DIR / f'{dataset_name}_{key}.pkl'
 
 
+def _names_sha256(names: list[str]) -> str:
+    return hashlib.sha256('\n'.join(names).encode('utf-8')).hexdigest()
+
+
+def _labels_rawdata_identity(label_files: list[Path]) -> dict:
+    """Stable across git clone / re-download: file names, not mtimes."""
+    names = sorted(path.name for path in label_files)
+    return {
+        'n_label_files': len(names),
+        'label_names_sha256': _names_sha256(names),
+    }
+
+
+def _published_feature_cache_path(dataset_name: str, window_seconds: float) -> Path:
+    window = float(window_seconds or 0.0)
+    if window > 0:
+        return FEATURE_CACHE_DIR / f'{dataset_name}_window{window:g}.pkl'
+    return FEATURE_CACHE_DIR / f'{dataset_name}.pkl'
+
+
 def _waveform_cache_path(dataset_name: str, fingerprint: dict) -> Path:
     key = hashlib.sha256(
         json.dumps(fingerprint, sort_keys=True, default=str).encode()
@@ -174,6 +194,37 @@ def _fingerprint_without_demos(meta: dict) -> dict:
     return out
 
 
+def _identities_compatible(want: object, have: object) -> bool:
+    if not isinstance(want, dict) or not isinstance(have, dict):
+        return want == have
+    want_n = want.get('n_label_files', want.get('n_ppg_files'))
+    have_n = have.get('n_label_files', have.get('n_ppg_files'))
+    if want_n != have_n:
+        return False
+    want_hash = want.get('label_names_sha256') or want.get('ppg_names_sha256')
+    have_hash = have.get('label_names_sha256') or have.get('ppg_names_sha256')
+    if want_hash and have_hash:
+        return want_hash == have_hash
+    return True
+
+
+def _fingerprints_compatible(want: dict, have: dict) -> bool:
+    want_fp = _fingerprint_without_demos(want)
+    have_fp = _fingerprint_without_demos(have)
+    want_id = want_fp.pop('identity', None)
+    have_id = have_fp.pop('identity', None)
+    return want_fp == have_fp and _identities_compatible(want_id, have_id)
+
+
+def _feature_cache_meta_paths(dataset_name: str, window_seconds: float) -> list[Path]:
+    paths = []
+    published = _published_feature_cache_path(dataset_name, window_seconds).with_suffix('.meta.json')
+    if published.is_file():
+        paths.append(published)
+    paths.extend(sorted(FEATURE_CACHE_DIR.glob(f'{dataset_name}_*.meta.json')))
+    return paths
+
+
 def _manifest_window_seconds(labels_dir: Path) -> float | None:
     manifest = labels_dir.parent / 'manifest.json'
     if not manifest.is_file():
@@ -214,22 +265,22 @@ def _try_load_feature_cache(
         print(f'Loaded PPG features from {cache_path.name} ({len(df)} rows)')
         return _ppg_only_frame(df)
 
-    # Reuse older caches whose meta still listed basic_feature_keys.
+    # Reuse older caches whose meta still listed basic_feature_keys or mtimes.
     if fingerprint is None or dataset_name is None or not FEATURE_CACHE_DIR.is_dir():
         return None
-    want = _fingerprint_without_demos(fingerprint)
-    for meta_path in FEATURE_CACHE_DIR.glob(f'{dataset_name}_*.meta.json'):
+    window_seconds = float((fingerprint or {}).get('window_seconds') or 0.0)
+    for meta_path in _feature_cache_meta_paths(dataset_name, window_seconds):
         try:
             meta = json.loads(meta_path.read_text(encoding='utf-8'))
         except (OSError, json.JSONDecodeError):
             continue
-        if _fingerprint_without_demos(meta) != want:
+        if not _fingerprints_compatible(fingerprint, meta):
             continue
         pkl_path = meta_path.with_name(meta_path.name.removesuffix('.meta.json') + '.pkl')
         if not pkl_path.is_file():
             continue
         df = pd.read_pickle(pkl_path)
-        print(f'Loaded PPG features from legacy {pkl_path.name} ({len(df)} rows)')
+        print(f'Loaded PPG features from {pkl_path.name} ({len(df)} rows)')
         return _ppg_only_frame(df)
     return None
 
@@ -497,11 +548,7 @@ def _load_labels_rawdata_dataset(
         resolve_ppg_center_window_seconds(ppg_seconds),
         labels_dir,
     )
-    identity = {
-        'n_label_files': len(label_files),
-        'max_label_mtime': round(max(p.stat().st_mtime for p in label_files), 3),
-        'raw_data_mtime': round(raw_data_dir.stat().st_mtime, 3),
-    }
+    identity = _labels_rawdata_identity(label_files)
     fingerprint = _ppg_cache_fingerprint(
         dataset_name,
         window_seconds,

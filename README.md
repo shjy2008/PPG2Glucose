@@ -18,7 +18,7 @@ CPU by default. For GPU, set `USE_GPU = True` in `config.py`.
 
 ## Data
 
-- **VitalDB** — `python download_vitaldb.py --output-dir dataset/vitaldb --window-seconds 60`
+- **VitalDB** — `dataset/vitaldb` is in the repo (60 s windows). CatBoost loads `feature_cache/vitaldb.pkl`, so `python train_catboost.py --dataset vitaldb` does not re-extract PPG features. TinyML / CBHFF still build a waveform cache on first run. Rebuild features with `--refresh-cache`.
 - **MUST** — [Mendeley](https://data.mendeley.com/datasets/37pm7jk7jn/3) into `dataset/MUST/`
 - **IPS-PPG** — private; `--dataset IPS`
 

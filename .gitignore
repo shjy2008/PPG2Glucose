@@ -1,7 +1,11 @@
 # temp files
 __pycache__/
 catboost_info/
-feature_cache/
+feature_cache/*
+!feature_cache/vitaldb.pkl
+!feature_cache/vitaldb.meta.json
+!feature_cache/vitaldb_window10.pkl
+!feature_cache/vitaldb_window10.meta.json
 waveform_cache/
 .cache/
 
@@ -23,9 +27,12 @@ seg_error_grid.png
 
 # documents
 papers/
+# paper/
 
 # TinyML code
 TinyML_code/
 !TinyML_code/resnet.py
+
+/CBHFF/README.md
 
 .mplconfig/

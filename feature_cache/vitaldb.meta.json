@@ -1,0 +1,30 @@
+{
+  "dataset": "vitaldb",
+  "identity": {
+    "label_names_sha256": "853dec5524ae935b2ad7765c519cbb795b6d36823789293f1adcc89803cd93a7",
+    "n_label_files": 7506
+  },
+  "max_samples": null,
+  "ppg_best_segment_hop_seconds": 1.0,
+  "ppg_best_segment_seconds": null,
+  "ppg_center_window_seconds": null,
+  "ppg_csv_column": null,
+  "ppg_feature_groups": [
+    "g1",
+    "g2",
+    "g3",
+    "g4",
+    "g5",
+    "g6"
+  ],
+  "ppg_filter": "none",
+  "ppg_sampling_rate": 500,
+  "ppg_sqa_threshold": null,
+  "ppg_sqa_window_seconds": 6.0,
+  "ppg_target_fs": null,
+  "ppg_trim_fractions": [
+    0.0,
+    0.0
+  ],
+  "window_seconds": 0.0
+}
