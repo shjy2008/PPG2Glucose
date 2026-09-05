@@ -14,7 +14,7 @@ Code for the paper. Three models, five evaluation protocols, three datasets.
 pip install -r requirements.txt   # Python 3.10+
 ```
 
-CPU by default. For GPU, set `USE_GPU = True` in `config.py`.
+TinyML and CBHFF use GPU when CUDA is available, otherwise CPU. CatBoost stays on CPU. Set `USE_GPU = False` in `config.py` to force CPU for the deep models.
 
 ## Data
 
