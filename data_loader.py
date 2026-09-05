@@ -967,6 +967,7 @@ def _load_Hb_PPG_dataset(
         center_window_seconds=center_seconds,
     )
     cache_path = _feature_cache_path('Hb_PPG', fingerprint)
+    print(f'Hb_PPG wavelengths: {ppg_csv_column("Hb_PPG")}')
     cached = _try_load_feature_cache(
         cache_path, refresh_cache, fingerprint=fingerprint, dataset_name='Hb_PPG'
     )
@@ -977,7 +978,6 @@ def _load_Hb_PPG_dataset(
     n_files = len(rows)
     progress_every = max(1, n_files // 20)
     print(f'Loading {n_files} sample(s) from {csv_dir} (PPG feature extraction)...')
-    print(f'Hb_PPG wavelengths: {ppg_csv_column("Hb_PPG")}')
     if center_seconds:
         print(f'Center-cropping PPG to {center_seconds:g} s (Hb_PPG)')
     else:
@@ -1213,6 +1213,7 @@ def load_waveform_dataset(
                 ),
             )
         elif layout == 'Hb_PPG':
+            print(f'Hb_PPG wavelengths: {ppg_csv_column("Hb_PPG")}')
             signals, demographics, targets, groups, sessions = _cached_or_build(
                 config_name,
                 root,
@@ -1484,7 +1485,6 @@ def _load_Hb_PPG_waveform_dataset(
         print(f'Center-cropping PPG to {center_seconds:g} s (Hb_PPG)')
     else:
         print('Using full on-disk PPG signal (Hb_PPG)')
-    print(f'Hb_PPG wavelengths: {ppg_csv_column("Hb_PPG")}')
 
     pending = []
     lengths = []
