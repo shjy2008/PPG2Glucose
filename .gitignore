@@ -13,12 +13,14 @@ waveform_cache/*
 !waveform_cache/vitaldb_window10.meta.json
 .cache/
 
-# datasets (MUST and vitaldb are published; other local folders stay untracked)
+# datasets (MUST and vitaldb, Hb_PPG are published; other local folders stay untracked)
 dataset/*
 !dataset/MUST/
 !dataset/MUST/**
 !dataset/vitaldb/
 !dataset/vitaldb/**
+!dataset/Hb_PPG_Dataset/
+!dataset/Hb_PPG_Dataset/**
 
 .vscode
 .DS_Store
