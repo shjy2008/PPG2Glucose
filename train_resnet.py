@@ -16,7 +16,6 @@ from config import (
 )
 from TinyML_code.resnet import resnet34
 from waveform_train import (
-    expand_waveform_windows,
     make_signal_loader,
     normalize_signals_per_sample,
     normalize_targets,
@@ -341,35 +340,17 @@ def main() -> None:
     else:
         print(f'PPG: root={root}, center-crop {center:g} s')
 
-    # Load native-length waveforms when windowing so we can chop before resize.
-    load_length = 0 if window_seconds > 0 else args.signal_length
     signals, demographics, targets, groups, sessions = data_loader.load_waveform_dataset(
         dataset=args.dataset,
-        signal_length=load_length,
+        signal_length=args.signal_length,
         include_basic=args.include_basic,
         resample=True,
         max_samples=args.max_samples,
         return_groups=True,
         return_sessions=True,
         ppg_seconds=ppg_seconds,
+        window_seconds=window_seconds,
     )
-    if window_seconds > 0:
-        n_labs = len(targets)
-        signals, demographics, targets, groups, sessions = expand_waveform_windows(
-            signals,
-            demographics,
-            targets,
-            groups,
-            dataset=args.dataset,
-            window_seconds=window_seconds,
-            signal_length=args.signal_length if args.signal_length > 0 else 1024,
-            resample=True,
-            sessions=sessions,
-        )
-        print(
-            f'Windowed {n_labs} lab draws → {len(targets)} segments '
-            f'({window_seconds:g} s, shared glucose labels)'
-        )
     signals = normalize_signals_per_sample(signals)
     basic_mode = 'with basic info' if args.include_basic and demographics.size else 'PPG only'
     print(

@@ -14,12 +14,11 @@ import evaluation
 from config import (
     DEFAULT_VITALDB_PPG_SECONDS,
     basic_feature_keys,
-    ppg_sampling_rate,
-    ppg_target_fs,
     resolve_config_dataset,
     torch_float_tensor,
 )
-from data_ppg import effective_sampling_rate, segment_signal
+
+expand_waveform_windows = data_loader.expand_waveform_windows
 
 
 def set_seed(seed: int) -> None:
@@ -58,61 +57,6 @@ def standardize_train_test(
         ((train - mean) / std).astype(np.float32, copy=False),
         ((validation - mean) / std).astype(np.float32, copy=False),
     )
-
-
-def expand_waveform_windows(
-    signals: np.ndarray,
-    demographics: np.ndarray,
-    targets: np.ndarray,
-    groups: np.ndarray,
-    *,
-    dataset: str,
-    window_seconds: float,
-    signal_length: int,
-    resample: bool = True,
-    sessions: Optional[np.ndarray] = None,
-) -> tuple[np.ndarray, ...]:
-    """Chop each waveform into windows that share the same glucose label."""
-    fs = effective_sampling_rate(ppg_sampling_rate(dataset), ppg_target_fs(dataset))
-    windowed_signals = []
-    windowed_demographics = []
-    windowed_targets = []
-    windowed_groups = []
-    windowed_sessions = [] if sessions is not None else None
-    for index in range(len(targets)):
-        windows = segment_signal(signals[index], fs=fs, window_seconds=window_seconds)
-        if not windows:
-            continue
-        demo = demographics[index]
-        target = targets[index]
-        group = groups[index]
-        session = None if sessions is None else sessions[index]
-        for window in windows:
-            resized = data_loader._resize_waveform(
-                np.asarray(window, dtype=np.float32),
-                signal_length,
-                resample=resample,
-            )
-            windowed_signals.append(resized)
-            windowed_demographics.append(demo)
-            windowed_targets.append(target)
-            windowed_groups.append(group)
-            if windowed_sessions is not None:
-                windowed_sessions.append(session)
-
-    if not windowed_signals:
-        raise RuntimeError(
-            f'No windows produced with window_seconds={window_seconds} at fs={fs}'
-        )
-    out = (
-        np.stack(windowed_signals, axis=0),
-        np.stack(windowed_demographics, axis=0),
-        np.asarray(windowed_targets, dtype=np.float32),
-        np.asarray(windowed_groups),
-    )
-    if sessions is None:
-        return out
-    return (*out, np.asarray(windowed_sessions).astype(str))
 
 
 def split_train_val(
@@ -178,33 +122,16 @@ def load_waveform_split(
     max_samples: int | None = None,
     resample: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    load_length = 0 if window_seconds > 0 else signal_length
-    signals, demographics, targets, groups = data_loader.load_waveform_dataset(
+    return data_loader.load_waveform_dataset(
         dataset=dataset,
-        signal_length=load_length,
+        signal_length=signal_length,
         include_basic=include_basic,
         resample=resample,
         max_samples=max_samples,
         return_groups=True,
         ppg_seconds=default_ppg_seconds(dataset),
+        window_seconds=window_seconds,
     )
-    if window_seconds > 0:
-        n_labs = len(targets)
-        signals, demographics, targets, groups = expand_waveform_windows(
-            signals,
-            demographics,
-            targets,
-            groups,
-            dataset=dataset,
-            window_seconds=window_seconds,
-            signal_length=signal_length if signal_length > 0 else 1024,
-            resample=resample,
-        )
-        print(
-            f'{dataset}: windowed {n_labs} lab draws → {len(targets)} segments '
-            f'({window_seconds:g} s)'
-        )
-    return signals, demographics, targets, groups
 
 
 def _resize_signals(signals: np.ndarray, length: int) -> np.ndarray:

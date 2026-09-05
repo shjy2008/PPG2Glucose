@@ -29,7 +29,6 @@ from config import (
 )
 from data_loader import resolve_dataset_root
 from waveform_train import (
-    expand_waveform_windows,
     make_signal_loader,
     normalize_signals_per_sample,
     normalize_targets,
@@ -210,27 +209,17 @@ def main() -> None:
         + ('full on-disk signal' if center is None else f'center-crop {center:g} s')
     )
 
-    load_length = 0 if window_seconds > 0 else args.signal_length
     signals, demographics, targets, groups, sessions = data_loader.load_waveform_dataset(
         dataset=args.dataset,
-        signal_length=load_length,
+        signal_length=args.signal_length,
         include_basic=args.include_basic,
         resample=True,
         max_samples=args.max_samples,
         return_groups=True,
         return_sessions=True,
         ppg_seconds=ppg_seconds,
+        window_seconds=window_seconds,
     )
-    if window_seconds > 0:
-        n_labs = len(targets)
-        signals, demographics, targets, groups, sessions = expand_waveform_windows(
-            signals, demographics, targets, groups,
-            dataset=args.dataset,
-            window_seconds=window_seconds,
-            signal_length=args.signal_length if args.signal_length > 0 else 1024,
-            sessions=sessions,
-        )
-        print(f'Windowed {n_labs} → {len(targets)} segments ({window_seconds:g} s)')
 
     signals = normalize_signals_per_sample(signals)
     mode = utils.exclusive_split_mode(sample_wise=args.sample_wise, pas=args.pas)

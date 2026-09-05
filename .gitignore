@@ -6,7 +6,11 @@ feature_cache/*
 !feature_cache/vitaldb.meta.json
 !feature_cache/vitaldb_window10.pkl
 !feature_cache/vitaldb_window10.meta.json
-waveform_cache/
+waveform_cache/*
+!waveform_cache/vitaldb.npz
+!waveform_cache/vitaldb.meta.json
+!waveform_cache/vitaldb_window10.npz
+!waveform_cache/vitaldb_window10.meta.json
 .cache/
 
 # datasets
