@@ -138,6 +138,7 @@ def main():
     from config import (
         DEFAULT_VITALDB_PPG_SECONDS,
         ppg_best_segment_seconds,
+        ppg_csv_column,
         ppg_feature_groups,
         ppg_filter,
         ppg_sqa_threshold,
@@ -180,6 +181,7 @@ def main():
         f"target_fs={ppg_target_fs(args.dataset)}, "
         f"best_segment_seconds={ppg_best_segment_seconds(args.dataset)}, "
         f"feature_groups={ppg_feature_groups(args.dataset)}, "
+        f"ppg_csv_column={ppg_csv_column(args.dataset)}, "
         f"sqa_threshold={ppg_sqa_threshold(args.dataset)})"
     )
     sessions = None

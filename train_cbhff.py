@@ -35,6 +35,8 @@ from waveform_train import (
     set_seed,
     split_train_val,
     standardize_train_test,
+    waveform_length,
+    waveform_n_channels,
 )
 
 
@@ -181,7 +183,10 @@ def run_fold(signals, demographics, targets, train_index, test_index, args, devi
         )
 
     n_demo = train_demo.shape[1] if use_basic else 0
-    model = BloodGlucosePredictor(n_demographics=n_demo).to(device)
+    model = BloodGlucosePredictor(
+        n_demographics=n_demo,
+        in_channel=waveform_n_channels(signals),
+    ).to(device)
     train_model(model, train_loader, val_loader, args, device)
     test_loader = make_signal_loader(
         signals[test_index], None, args.batch_size, False, demographics=test_demo
@@ -237,7 +242,8 @@ def main() -> None:
     basic_mode = 'with basic' if args.include_basic and demographics.size else 'PPG only'
     print(
         f'Training CBHFF on {device.type}: {len(targets)} samples, '
-        f'len={signals.shape[1]}, {basic_mode}, {split_desc}'
+        f'len={waveform_length(signals)}, {waveform_n_channels(signals)} ch, '
+        f'{basic_mode}, {split_desc}'
     )
 
     def predict_fold(train_index, test_index, seed):

@@ -15,7 +15,7 @@ import torch
 from CBHFF import BloodGlucosePredictor
 from config import DEFAULT_SEEDS, DEFAULT_WINDOW_SECONDS, torch_device
 from train_cbhff import predict, train_model
-from waveform_train import prepare_ood_waveforms, run_waveform_ood, set_seed
+from waveform_train import prepare_ood_waveforms, run_waveform_ood, set_seed, waveform_n_channels
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -92,7 +92,7 @@ def main() -> None:
     print(
         f'Training CBHFF on {device.type}: '
         f'{len(train_y)} train / {len(test_y)} test, '
-        f'len={train_signals.shape[1]}, {mode}'
+        f'len={train_signals.shape[-1]}, {waveform_n_channels(train_signals)} ch, {mode}'
     )
 
     def train_fn(model, train_loader, val_loader, train_args, train_device, _use_basic):
@@ -109,7 +109,9 @@ def main() -> None:
         test_signals,
         test_demo,
         test_y,
-        build_model=lambda n_demo: BloodGlucosePredictor(n_demographics=n_demo),
+        build_model=lambda n_demo, n_ch=waveform_n_channels(train_signals): BloodGlucosePredictor(
+            n_demographics=n_demo, in_channel=n_ch
+        ),
         train_model=train_fn,
         predict=predict_fn,
         args=args,

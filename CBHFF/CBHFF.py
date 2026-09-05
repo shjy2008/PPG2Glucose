@@ -89,10 +89,10 @@ class Multiview_Attention(nn.Module):
 
 
 class BloodGlucosePredictor(nn.Module):
-    def __init__(self, n_demographics: int = 0):
+    def __init__(self, n_demographics: int = 0, in_channel: int = 1):
         super().__init__()
         self.n_demographics = n_demographics
-        self.conv1 = nn.Conv1d(1, 16, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv1d(in_channel, 16, kernel_size=3, padding=1)
         self.mva1 = Multiview_Attention(16)
         self.bn1 = nn.BatchNorm1d(16)
         self.pool1 = nn.MaxPool1d(2)

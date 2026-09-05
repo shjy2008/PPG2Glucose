@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +15,7 @@ from config import (
     DEFAULT_PPG_TRIM_FRACTIONS,
     PPG_BEST_SEGMENT_HOP_SECONDS,
     PPG_SQA_WINDOW_SECONDS,
+    normalize_ppg_csv_column,
 )
 from utils import safe_float
 
@@ -217,8 +219,11 @@ def select_best_segment(
     window_seconds: float | None,
     hop_seconds: float = PPG_BEST_SEGMENT_HOP_SECONDS,
 ) -> np.ndarray:
-    """Select the overlapping full window with the highest skewness SSQI."""
-    values = np.asarray(signal, dtype=float).reshape(-1)
+    """Select the overlapping full window with the highest skewness SSQI.
+
+    Multi-channel signals keep a shared time window (mean SSQI across channels).
+    """
+    values = np.asarray(signal, dtype=float)
     if values.size == 0 or window_seconds is None:
         return values
 
@@ -226,15 +231,33 @@ def select_best_segment(
     hop_samples = int(round(float(hop_seconds) * float(fs)))
     if window_samples < 1 or hop_samples < 1:
         raise ValueError('best-segment window and hop must yield at least one sample')
-    if values.size <= window_samples:
-        return values
 
-    starts = range(0, values.size - window_samples + 1, hop_samples)
-    best_start = max(
-        starts,
-        key=lambda start: ppg_ssqi(values[start : start + window_samples]),
-    )
-    return values[best_start : best_start + window_samples]
+    if values.ndim == 1:
+        if values.size <= window_samples:
+            return values
+        starts = range(0, values.size - window_samples + 1, hop_samples)
+        best_start = max(
+            starts,
+            key=lambda start: ppg_ssqi(values[start : start + window_samples]),
+        )
+        return values[best_start : best_start + window_samples]
+
+    if values.ndim != 2:
+        raise ValueError(f'PPG signal must be 1-D or (C, T), got shape {values.shape}')
+    length = values.shape[1]
+    if length <= window_samples:
+        return values
+    starts = range(0, length - window_samples + 1, hop_samples)
+
+    def _score(start: int) -> float:
+        return float(
+            np.mean(
+                [ppg_ssqi(channel[start : start + window_samples]) for channel in values]
+            )
+        )
+
+    best_start = max(starts, key=_score)
+    return values[:, best_start : best_start + window_samples]
 
 
 def select_sqa_windows(
@@ -257,14 +280,29 @@ def apply_sqa_mask(
     threshold: float | None,
     window_seconds: float = PPG_SQA_WINDOW_SECONDS,
 ) -> np.ndarray | None:
-    """Concatenate SSQI-accepted windows. None if SQA rejects the whole signal."""
-    values = np.asarray(signal, dtype=float).reshape(-1)
+    """Concatenate SSQI-accepted windows. None if SQA rejects the whole signal.
+
+    Multi-channel signals keep a window only when every channel passes.
+    """
+    values = np.asarray(signal, dtype=float)
     if threshold is None:
         return values
-    good = select_sqa_windows(values, fs=fs, threshold=threshold, window_seconds=window_seconds)
-    if not good:
+    if values.ndim == 1:
+        good = select_sqa_windows(
+            values, fs=fs, threshold=threshold, window_seconds=window_seconds
+        )
+        if not good:
+            return None
+        return np.concatenate(good)
+    if values.ndim != 2:
+        raise ValueError(f'PPG signal must be 1-D or (C, T), got shape {values.shape}')
+    kept = []
+    for window in segment_signal(values, fs=fs, window_seconds=window_seconds):
+        if all(ppg_ssqi(channel) > float(threshold) for channel in window):
+            kept.append(window)
+    if not kept:
         return None
-    return np.concatenate(good)
+    return np.concatenate(kept, axis=1)
 
 
 def extract_ppg_bpm(row: pd.Series) -> dict:
@@ -278,6 +316,36 @@ def extract_ppg_bpm(row: pd.Series) -> dict:
     }
 
 
+def csv_column_names(
+    csv_column: str | Sequence[str] | None,
+) -> tuple[str, ...] | None:
+    value = normalize_ppg_csv_column(csv_column)
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return (value,)
+    return value
+
+
+def csv_column_tag(name: str) -> str:
+    return ''.join(ch if ch.isalnum() else '_' for ch in str(name).strip()).strip('_')
+
+
+def _apply_per_channel(signal: np.ndarray, fn: Callable[[np.ndarray], np.ndarray]) -> np.ndarray:
+    arr = np.asarray(signal, dtype=float)
+    if arr.ndim == 1:
+        return np.asarray(fn(arr), dtype=float).reshape(-1)
+    if arr.ndim != 2:
+        raise ValueError(f'PPG signal must be 1-D or (C, T), got shape {arr.shape}')
+    channels = [np.asarray(fn(channel), dtype=float).reshape(-1) for channel in arr]
+    lengths = {channel.size for channel in channels}
+    if len(lengths) != 1:
+        raise ValueError(
+            f'Wavelength channels diverged during preprocessing: {[c.size for c in channels]}'
+        )
+    return np.stack(channels, axis=0)
+
+
 def read_signal_waveform(
     signal_path: Path,
     trim_fractions: tuple[float, float] = DEFAULT_PPG_TRIM_FRACTIONS,
@@ -285,17 +353,27 @@ def read_signal_waveform(
     filter_name: str = DEFAULT_PPG_FILTER,
     target_fs: float | None = DEFAULT_PPG_TARGET_FS,
     center_window_seconds: float | None = None,
-    csv_column: str | None = None,
+    csv_column: str | Sequence[str] | None = None,
 ) -> np.ndarray:
-    """Return PPG samples (trim → filter at native fs → optional downsample → center crop)."""
+    """Return PPG samples (trim → filter at native fs → optional downsample → center crop).
+
+    One CSV column yields a 1-D array of length T. Several columns yield (C, T).
+    """
     signal = _read_signal_values(signal_path, csv_column=csv_column)
-    signal = trim_signal(signal, *trim_fractions)
-    signal = apply_ppg_filter(signal, fs=fs, filter_name=filter_name)
-    signal = downsample_signal(signal, source_fs=fs, target_fs=target_fs)
-    return center_crop_seconds(
+    signal = _apply_per_channel(signal, lambda values: trim_signal(values, *trim_fractions))
+    signal = _apply_per_channel(
+        signal, lambda values: apply_ppg_filter(values, fs=fs, filter_name=filter_name)
+    )
+    signal = _apply_per_channel(
         signal,
-        fs=effective_sampling_rate(fs, target_fs),
-        window_seconds=center_window_seconds,
+        lambda values: downsample_signal(values, source_fs=fs, target_fs=target_fs),
+    )
+    fs_eff = effective_sampling_rate(fs, target_fs)
+    return _apply_per_channel(
+        signal,
+        lambda values: center_crop_seconds(
+            values, fs=fs_eff, window_seconds=center_window_seconds
+        ),
     )
 
 
@@ -307,37 +385,67 @@ def _csv_has_header(columns) -> bool:
     return False
 
 
-def _select_csv_series(frame: pd.DataFrame, csv_column: str | None) -> pd.Series:
-    if csv_column is None:
-        return frame.iloc[:, 0]
-    if csv_column in frame.columns:
-        return frame[csv_column]
+def _match_csv_column(columns, csv_column: str) -> str:
+    if csv_column in columns:
+        return csv_column
     want = str(csv_column).lower().replace(' ', '')
-    for name in frame.columns:
+    for name in columns:
         if str(name).lower().replace(' ', '') == want:
-            return frame[name]
+            return str(name)
     raise ValueError(
-        f'PPG CSV column {csv_column!r} not in {list(frame.columns)}'
+        f'PPG CSV column {csv_column!r} not in {list(columns)}'
     )
 
 
-def _read_signal_values(signal_path: Path, csv_column: str | None = None) -> np.ndarray:
-    if signal_path.suffix.lower() == '.csv':
-        header = pd.read_csv(signal_path, nrows=0)
-        if _csv_has_header(header.columns):
-            usecols = None if csv_column is None else [csv_column]
-            try:
-                frame = pd.read_csv(signal_path, usecols=usecols)
-            except ValueError:
-                frame = pd.read_csv(signal_path)
-            values = _select_csv_series(frame, csv_column)
-        else:
-            frame = pd.read_csv(signal_path, header=None)
-            values = frame.iloc[:, 0]
+def _finite_signal_matrix(frame: pd.DataFrame, columns: list[str]) -> np.ndarray:
+    mat = np.column_stack(
+        [
+            pd.to_numeric(frame[column], errors='coerce').to_numpy(dtype=float)
+            for column in columns
+        ]
+    )
+    finite = np.isfinite(mat).all(axis=1)
+    mat = mat[finite]
+    if mat.shape[1] == 1:
+        return mat[:, 0]
+    return mat.T
+
+
+def _read_signal_values(
+    signal_path: Path,
+    csv_column: str | Sequence[str] | None = None,
+) -> np.ndarray:
+    names = csv_column_names(csv_column)
+    if signal_path.suffix.lower() != '.csv':
+        if names is not None and len(names) > 1:
+            raise ValueError(
+                f'Multi-wavelength PPG requires a CSV; got {signal_path.suffix}'
+            )
+        with open(signal_path, 'r') as f:
+            return np.asarray([float(x) for x in f.read().split()], dtype=float)
+
+    header = pd.read_csv(signal_path, nrows=0)
+    if not _csv_has_header(header.columns):
+        if names is not None and len(names) > 1:
+            raise ValueError(
+                f'Headerless CSV cannot select named wavelengths {list(names)}'
+            )
+        frame = pd.read_csv(signal_path, header=None)
+        values = frame.iloc[:, 0]
         arr = pd.to_numeric(values, errors='coerce').to_numpy(dtype=float)
         return arr[np.isfinite(arr)]
-    with open(signal_path, 'r') as f:
-        return np.asarray([float(x) for x in f.read().split()], dtype=float)
+
+    if names is None:
+        frame = pd.read_csv(signal_path)
+        return _finite_signal_matrix(frame, [frame.columns[0]])
+
+    try:
+        resolved = [_match_csv_column(header.columns, name) for name in names]
+        frame = pd.read_csv(signal_path, usecols=resolved)
+    except ValueError:
+        frame = pd.read_csv(signal_path)
+        resolved = [_match_csv_column(frame.columns, name) for name in names]
+    return _finite_signal_matrix(frame, resolved)
 
 
 def _moving_average(values: np.ndarray, window: int) -> np.ndarray:
@@ -694,6 +802,41 @@ def extract_ppg_features(
     return features
 
 
+def _prefix_wavelength_features(features: dict, tag: str) -> dict:
+    renamed = {}
+    for key, value in features.items():
+        group, rest = key.split('_', 1) if '_' in key else (key, '')
+        renamed[f'{group}_{tag}_{rest}' if rest else f'{tag}_{key}'] = value
+    return renamed
+
+
+def extract_channel_features(
+    signal: np.ndarray,
+    fs: float,
+    feature_groups: tuple[str, ...],
+    csv_column: str | Sequence[str] | None = None,
+) -> dict:
+    """Extract features from a 1-D or (C, T) waveform; prefix when C > 1."""
+    values = np.asarray(signal, dtype=float)
+    if values.ndim == 1:
+        return extract_ppg_features(values, fs=fs, feature_groups=feature_groups)
+    if values.ndim != 2:
+        raise ValueError(f'PPG signal must be 1-D or (C, T), got shape {values.shape}')
+    names = csv_column_names(csv_column) or tuple(
+        f'ch{index}' for index in range(values.shape[0])
+    )
+    merged = {}
+    for index, channel in enumerate(values):
+        name = names[index] if index < len(names) else f'ch{index}'
+        merged.update(
+            _prefix_wavelength_features(
+                extract_ppg_features(channel, fs=fs, feature_groups=feature_groups),
+                csv_column_tag(name),
+            )
+        )
+    return merged
+
+
 def extract_raw_ppg(
     signal_path: str | Path,
     fs: float = DEFAULT_PPG_SAMPLING_RATE,
@@ -705,7 +848,7 @@ def extract_raw_ppg(
     sqa_threshold: float | None = None,
     sqa_window_seconds: float = PPG_SQA_WINDOW_SECONDS,
     center_window_seconds: float | None = None,
-    csv_column: str | None = None,
+    csv_column: str | Sequence[str] | None = None,
 ) -> dict | None:
     signal = read_signal_waveform(
         Path(signal_path),
@@ -726,22 +869,38 @@ def extract_raw_ppg(
     )
     if signal is None or signal.size == 0:
         return None
-    return extract_ppg_features(signal, fs=fs_eff, feature_groups=feature_groups)
+    return extract_channel_features(
+        signal, fs=fs_eff, feature_groups=feature_groups, csv_column=csv_column
+    )
 
 
 def segment_signal(signal: np.ndarray, fs: float, window_seconds: float) -> list[np.ndarray]:
     """Non-overlapping windows; trailing remainder shorter than one window is dropped."""
-    values = np.asarray(signal, dtype=float).reshape(-1)
-    if values.size == 0:
-        return []
+    values = np.asarray(signal, dtype=float)
     window_samples = int(round(float(window_seconds) * float(fs)))
     if window_samples < 1:
         raise ValueError(f'window_seconds={window_seconds} yields <1 sample at fs={fs}')
-    if values.size < window_samples:
+    if values.ndim == 1:
+        values = values.reshape(-1)
+        if values.size == 0:
+            return []
+        if values.size < window_samples:
+            return [values]
+        n_windows = values.size // window_samples
+        return [
+            values[i * window_samples : (i + 1) * window_samples]
+            for i in range(n_windows)
+        ]
+    if values.ndim != 2:
+        raise ValueError(f'PPG signal must be 1-D or (C, T), got shape {values.shape}')
+    length = values.shape[1]
+    if length == 0:
+        return []
+    if length < window_samples:
         return [values]
-    n_windows = values.size // window_samples
+    n_windows = length // window_samples
     return [
-        values[i * window_samples : (i + 1) * window_samples]
+        values[:, i * window_samples : (i + 1) * window_samples]
         for i in range(n_windows)
     ]
 
@@ -757,7 +916,7 @@ def extract_raw_ppg_windows(
     feature_groups: tuple[str, ...] = DEFAULT_PPG_FEATURE_GROUPS,
     sqa_threshold: float | None = None,
     center_window_seconds: float | None = None,
-    csv_column: str | None = None,
+    csv_column: str | Sequence[str] | None = None,
 ) -> list[dict]:
     signal = read_signal_waveform(
         Path(signal_path),
@@ -772,9 +931,15 @@ def extract_raw_ppg_windows(
     signal = select_best_segment(signal, fs=fs_eff, window_seconds=best_segment_seconds)
     features = []
     for window in segment_signal(signal, fs=fs_eff, window_seconds=window_seconds):
-        if sqa_threshold is not None and ppg_ssqi(window) <= float(sqa_threshold):
-            continue
+        if sqa_threshold is not None:
+            if window.ndim == 1:
+                if ppg_ssqi(window) <= float(sqa_threshold):
+                    continue
+            elif any(ppg_ssqi(channel) <= float(sqa_threshold) for channel in window):
+                continue
         features.append(
-            extract_ppg_features(window, fs=fs_eff, feature_groups=feature_groups)
+            extract_channel_features(
+                window, fs=fs_eff, feature_groups=feature_groups, csv_column=csv_column
+            )
         )
     return features

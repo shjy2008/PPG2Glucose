@@ -22,6 +22,8 @@ from waveform_train import (
     set_seed,
     split_train_val,
     standardize_train_test,
+    waveform_length,
+    waveform_n_channels,
 )
 
 
@@ -92,10 +94,10 @@ def apply_quick_settings(args) -> None:
 
 
 class ResNetRegressor(nn.Module):
-    def __init__(self, n_demographics: int = 0):
+    def __init__(self, n_demographics: int = 0, in_channel: int = 1):
         super().__init__()
         self.n_demographics = n_demographics
-        self.backbone = resnet34(in_channel=1)
+        self.backbone = resnet34(in_channel=in_channel)
         self.backbone.fc2 = nn.Identity()
         self.output = nn.Linear(128 + n_demographics, 1)
 
@@ -297,7 +299,10 @@ def run_fold(
     )
 
     n_demographics = train_demographics.shape[1] if use_basic else 0
-    model = ResNetRegressor(n_demographics=n_demographics).to(device)
+    model = ResNetRegressor(
+        n_demographics=n_demographics,
+        in_channel=waveform_n_channels(train_signals),
+    ).to(device)
     train_model(model, train_loader, val_loader, args, device, use_basic)
     return predict(
         model,
@@ -355,7 +360,8 @@ def main() -> None:
     basic_mode = 'with basic info' if args.include_basic and demographics.size else 'PPG only'
     print(
         f'Training ResNet-34 on {device.type}: {len(targets)} samples, '
-        f'signal length {signals.shape[1]} ({basic_mode})'
+        f'signal length {waveform_length(signals)}, '
+        f'{waveform_n_channels(signals)} channel(s) ({basic_mode})'
     )
 
     mode = utils.exclusive_split_mode(sample_wise=args.sample_wise, pas=args.pas)

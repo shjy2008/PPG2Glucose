@@ -20,6 +20,7 @@ from config import (
     ppg_filter,
     ppg_sampling_rate,
     ppg_csv_column,
+    ppg_csv_column_fingerprint,
     ppg_sqa_threshold,
     ppg_target_fs,
     ppg_trim_fractions,
@@ -171,7 +172,7 @@ def _waveform_cache_fingerprint(
         'ppg_target_fs': ppg_target_fs(dataset_name),
         'ppg_trim_fractions': list(ppg_trim_fractions(dataset_name)),
         'ppg_filter': ppg_filter(dataset_name),
-        'ppg_csv_column': ppg_csv_column(dataset_name),
+        'ppg_csv_column': ppg_csv_column_fingerprint(dataset_name),
         'identity': identity,
     }
 
@@ -303,7 +304,7 @@ def _ppg_cache_fingerprint(
         'ppg_sqa_threshold': ppg_sqa_threshold(dataset_name),
         'ppg_sqa_window_seconds': PPG_SQA_WINDOW_SECONDS,
         'ppg_center_window_seconds': center_window_seconds,
-        'ppg_csv_column': ppg_csv_column(dataset_name),
+        'ppg_csv_column': ppg_csv_column_fingerprint(dataset_name),
         'identity': identity,
     }
 
@@ -976,6 +977,7 @@ def _load_Hb_PPG_dataset(
     n_files = len(rows)
     progress_every = max(1, n_files // 20)
     print(f'Loading {n_files} sample(s) from {csv_dir} (PPG feature extraction)...')
+    print(f'Hb_PPG wavelengths: {ppg_csv_column("Hb_PPG")}')
     if center_seconds:
         print(f'Center-cropping PPG to {center_seconds:g} s (Hb_PPG)')
     else:
@@ -1020,12 +1022,21 @@ def _load_Hb_PPG_dataset(
 
 
 def _resize_waveform(waveform: np.ndarray, target_length: int, resample: bool) -> np.ndarray:
-    if waveform.size >= target_length:
+    values = np.asarray(waveform)
+    if values.ndim == 2:
+        return np.stack(
+            [
+                _resize_waveform(channel, target_length, resample=resample)
+                for channel in values
+            ],
+            axis=0,
+        )
+    if values.size >= target_length:
         if resample:
-            indices = np.linspace(0, waveform.size - 1, target_length).astype(int)
-            return waveform[indices]
-        return waveform[:target_length]
-    return np.pad(waveform, (0, target_length - waveform.size), mode='constant')
+            indices = np.linspace(0, values.size - 1, target_length).astype(int)
+            return values[indices]
+        return values[:target_length]
+    return np.pad(values, (0, target_length - values.size), mode='constant')
 
 
 def expand_waveform_windows(
@@ -1100,7 +1111,8 @@ def load_waveform_dataset(
     """Load per-session PPG waveforms and glucose targets (mmol/L).
 
     Returns:
-        signals: (n_samples, signal_length)
+        signals: (n_samples, signal_length) or (n_samples, n_channels, signal_length)
+            when ``PPG_CSV_COLUMN`` lists multiple wavelengths
         demographics: (n_samples, 4) or (n_samples, 0) when include_basic is False
         targets: (n_samples,)
         groups: subject IDs, returned only when return_groups is True
@@ -1334,7 +1346,7 @@ def _load_labels_rawdata_waveform_dataset(
             continue
 
         pending.append((waveform, basic_values, target, int(subject_id), str(session_key)))
-        lengths.append(int(waveform.size))
+        lengths.append(int(waveform.shape[-1]))
         if i == 1 or i == n_files or i % progress_every == 0:
             print(f'  loaded {i}/{n_files} files ({len(pending)} usable)', flush=True)
 
@@ -1425,7 +1437,7 @@ def _load_IPS_waveform_dataset(
             continue
 
         pending.append((waveform, basic_values, target, subject_id_int))
-        lengths.append(int(waveform.size))
+        lengths.append(int(waveform.shape[-1]))
 
     if not pending:
         raise RuntimeError(
@@ -1472,6 +1484,7 @@ def _load_Hb_PPG_waveform_dataset(
         print(f'Center-cropping PPG to {center_seconds:g} s (Hb_PPG)')
     else:
         print('Using full on-disk PPG signal (Hb_PPG)')
+    print(f'Hb_PPG wavelengths: {ppg_csv_column("Hb_PPG")}')
 
     pending = []
     lengths = []
@@ -1507,7 +1520,7 @@ def _load_Hb_PPG_waveform_dataset(
             continue
 
         pending.append((waveform, basic_values, target, subject_id))
-        lengths.append(int(waveform.size))
+        lengths.append(int(waveform.shape[-1]))
 
     if not pending:
         raise RuntimeError(

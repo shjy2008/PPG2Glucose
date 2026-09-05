@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from pathlib import Path
 
 # TinyML / CBHFF use CUDA when available. Set False to force CPU.
@@ -136,10 +137,12 @@ PPG_SQA_THRESHOLD = {
     'Hb_PPG': None,
 }
 
-# Named column for multi-wavelength CSVs. None = first column (MUST / vitaldb).
-# Hb-PPG 940 nm is the IR channel closest to typical fingertip glucose PPG.
+# Named CSV column(s) for multi-wavelength files. None = first column (MUST / vitaldb).
+# A string selects one channel. A tuple/list extracts each channel: tabular features
+# are prefixed (g1_660nm_ppg_mean, …); waveform models stack channels as (N, C, T).
+# Revert Hb_PPG to '940nm' to reproduce the single-wavelength baseline.
 PPG_CSV_COLUMN = {
-    'Hb_PPG': '940nm',
+    'Hb_PPG': ('660nm', '730nm', '850nm', '940nm'),
 }
 DEFAULT_PPG_CSV_COLUMN = None
 DEFAULT_PPG_SQA_THRESHOLD = None
@@ -223,8 +226,34 @@ def ppg_sqa_threshold(dataset: str):
     return PPG_SQA_THRESHOLD.get(resolve_config_dataset(dataset), DEFAULT_PPG_SQA_THRESHOLD)
 
 
-def ppg_csv_column(dataset: str):
-    return PPG_CSV_COLUMN.get(resolve_config_dataset(dataset), DEFAULT_PPG_CSV_COLUMN)
+def normalize_ppg_csv_column(
+    value: str | Sequence[str] | None,
+) -> str | tuple[str, ...] | None:
+    """None, one column name, or two-plus names as a tuple."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    columns = tuple(str(column) for column in value)
+    if not columns:
+        return None
+    if len(columns) == 1:
+        return columns[0]
+    return columns
+
+
+def ppg_csv_column(dataset: str) -> str | tuple[str, ...] | None:
+    return normalize_ppg_csv_column(
+        PPG_CSV_COLUMN.get(resolve_config_dataset(dataset), DEFAULT_PPG_CSV_COLUMN)
+    )
+
+
+def ppg_csv_column_fingerprint(dataset: str) -> str | list[str] | None:
+    """JSON-stable form of ``ppg_csv_column`` for feature/waveform cache keys."""
+    value = ppg_csv_column(dataset)
+    if isinstance(value, tuple):
+        return list(value)
+    return value
 
 
 def resolve_ppg_center_window_seconds(ppg_seconds: float | None = None) -> float | None:
