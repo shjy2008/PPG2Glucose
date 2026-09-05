@@ -43,7 +43,6 @@ DATASET_PARAMS = {
         'depth': 4,
         },
     'vitaldb': {},
-    'Hb_PPG': {'depth': 4},
 }
 
 
@@ -52,7 +51,7 @@ def build_parser():
     p.add_argument(
         '--dataset',
         default='IPS',
-        help='IPS, MUST, vitaldb, Hb_PPG, or a path',
+        help='IPS, MUST, vitaldb, or a path',
     )
     p.add_argument(
         '--ppg-seconds',

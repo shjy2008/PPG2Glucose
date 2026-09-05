@@ -13,12 +13,12 @@ waveform_cache/*
 !waveform_cache/vitaldb_window10.meta.json
 .cache/
 
-# datasets
-# dataset/
-dataset/IPS
-dataset/ieb
-# dataset/vitaldb
-dataset/vitaldb_*
+# datasets (MUST and vitaldb are published; other local folders stay untracked)
+dataset/*
+!dataset/MUST/
+!dataset/MUST/**
+!dataset/vitaldb/
+!dataset/vitaldb/**
 
 .vscode
 .DS_Store
@@ -31,7 +31,7 @@ seg_error_grid.png
 
 # documents
 papers/
-# paper/
+paper/
 
 # TinyML code
 TinyML_code/

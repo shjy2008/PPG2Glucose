@@ -129,9 +129,6 @@ def _waveform_source_identity(root: Path, layout: str) -> dict:
     if layout == 'IPS':
         names = sorted(path.name for path in (root / 'ppg').glob('*.txt'))
         return {'n_ppg_files': len(names), 'ppg_names_sha256': _names_sha256(names)}
-    if layout == 'Hb_PPG':
-        names = sorted(path.name for path in (root / 'data_csv').glob('*.csv'))
-        return {'n_ppg_files': len(names), 'ppg_names_sha256': _names_sha256(names)}
     return {}
 
 
@@ -597,12 +594,9 @@ def dataset_layout(root: Path) -> str:
         return 'MUST'
     if (root / 'bg_re.xlsx').is_file() and (root / 'ppg').is_dir():
         return 'IPS'
-    if (root / 'subject information.xlsx').is_file() and (root / 'data_csv').is_dir():
-        return 'Hb_PPG'
     raise RuntimeError(
         f'Unrecognized dataset layout under {root}. '
-        'Expected vitaldb/MUST (Labels/ + RawData/), IPS (bg_re.xlsx + ppg/), '
-        'or Hb_PPG (subject information.xlsx + data_csv/).'
+        'Expected vitaldb/MUST (Labels/ + RawData/) or IPS (bg_re.xlsx + ppg/).'
     )
 
 
@@ -651,14 +645,6 @@ def load_dataset(
             config_name,
             max_samples=max_samples,
             window_seconds=window_seconds,
-            refresh_cache=refresh_cache,
-            ppg_seconds=ppg_seconds,
-        )
-    if layout == 'Hb_PPG':
-        return _load_Hb_PPG_dataset(
-            root,
-            window_seconds=window_seconds,
-            max_samples=max_samples,
             refresh_cache=refresh_cache,
             ppg_seconds=ppg_seconds,
         )
@@ -866,159 +852,6 @@ def _load_IPS_dataset(
     return _attach_IPS_basic(dataset, root)
 
 
-HB_PPG_INFO_FILE = 'subject information.xlsx'
-HB_PPG_CSV_DIR = 'data_csv'
-HB_PPG_GLUCOSE_COL = 'Blood glucose (mmol/L)'
-
-
-def _hb_ppg_info_path(root: Path) -> Path:
-    return root / HB_PPG_INFO_FILE
-
-
-def _hb_ppg_csv_dir(root: Path) -> Path:
-    return root / HB_PPG_CSV_DIR
-
-
-def _read_hb_ppg_table(root: Path) -> pd.DataFrame:
-    path = _hb_ppg_info_path(root)
-    if not path.is_file():
-        raise RuntimeError(f'Missing {path}')
-    return pd.read_excel(path)
-
-
-def _hb_ppg_signal_path(root: Path, subject_id: int) -> Path:
-    return _hb_ppg_csv_dir(root) / f'{subject_id}.csv'
-
-
-def _iter_hb_ppg_rows(root: Path, max_samples: int | None = None):
-    metadata = _read_hb_ppg_table(root)
-    n_glucose_missing = 0
-    rows = []
-    for _, row in metadata.iterrows():
-        subject_id = safe_float(row.get('ID'))
-        target = safe_float(row.get(HB_PPG_GLUCOSE_COL))
-        if np.isnan(subject_id):
-            continue
-        if np.isnan(target):
-            n_glucose_missing += 1
-            continue
-        rows.append((int(subject_id), float(target), row))
-    rows.sort(key=lambda item: item[0])
-    if n_glucose_missing:
-        print(f'Skipped {n_glucose_missing} Hb_PPG subject(s) with missing glucose')
-    if max_samples is not None:
-        rows = rows[:max_samples]
-        print(f'Limited to {len(rows)} sample(s)')
-    return rows
-
-
-def _attach_Hb_PPG_basic(df: pd.DataFrame, root: Path) -> pd.DataFrame:
-    out = _ppg_only_frame(df)
-    keys = basic_feature_keys('Hb_PPG')
-    if not keys:
-        return out.reset_index(drop=True)
-
-    demo_records = []
-    for _, row in _read_hb_ppg_table(root).iterrows():
-        subject_id = safe_float(row.get('ID'))
-        if np.isnan(subject_id):
-            continue
-        info = extract_basic_info(row, keys)
-        if info:
-            demo_records.append({'subject_ID': int(subject_id), **info})
-    if not demo_records:
-        raise RuntimeError(f'No usable demographics {list(keys)} in {_hb_ppg_info_path(root)}')
-    merged = out.merge(
-        pd.DataFrame(demo_records).drop_duplicates('subject_ID'),
-        on='subject_ID',
-        how='inner',
-    )
-    dropped = len(out) - len(merged)
-    if dropped:
-        print(f'Dropped {dropped} row(s) missing demographics {list(keys)}')
-    if merged.empty:
-        raise RuntimeError(f'All rows dropped attaching demographics {list(keys)}')
-    id_cols = [c for c in ('subject_ID', 'window_ID', 'target') if c in merged.columns]
-    ppg_cols = [c for c in out.columns if c not in id_cols]
-    return merged.loc[:, id_cols + list(keys) + ppg_cols].reset_index(drop=True)
-
-
-def _load_Hb_PPG_dataset(
-    root: Path,
-    window_seconds: float = DEFAULT_WINDOW_SECONDS,
-    max_samples: int | None = None,
-    refresh_cache: bool = False,
-    ppg_seconds: float | None = None,
-) -> pd.DataFrame:
-    csv_dir = _hb_ppg_csv_dir(root)
-    csv_files = list(csv_dir.glob('*.csv')) if csv_dir.is_dir() else []
-    center_seconds = resolve_ppg_center_window_seconds(ppg_seconds)
-    identity = {
-        'n_ppg_files': len(csv_files),
-        'max_ppg_mtime': round(max((p.stat().st_mtime for p in csv_files), default=0.0), 3),
-        'subject_info_mtime': round(_hb_ppg_info_path(root).stat().st_mtime, 3),
-    }
-    fingerprint = _ppg_cache_fingerprint(
-        'Hb_PPG',
-        window_seconds,
-        max_samples,
-        identity,
-        center_window_seconds=center_seconds,
-    )
-    cache_path = _feature_cache_path('Hb_PPG', fingerprint)
-    cached = _try_load_feature_cache(
-        cache_path, refresh_cache, fingerprint=fingerprint, dataset_name='Hb_PPG'
-    )
-    if cached is not None:
-        return _attach_Hb_PPG_basic(cached, root)
-
-    rows = _iter_hb_ppg_rows(root, max_samples=max_samples)
-    n_files = len(rows)
-    progress_every = max(1, n_files // 20)
-    print(f'Loading {n_files} sample(s) from {csv_dir} (PPG feature extraction)...')
-    if center_seconds:
-        print(f'Center-cropping PPG to {center_seconds:g} s (Hb_PPG)')
-    else:
-        print('Using full on-disk PPG signal (Hb_PPG)')
-
-    records = []
-    for i, (subject_id, target, _row) in enumerate(rows, start=1):
-        signal_path = _hb_ppg_signal_path(root, subject_id)
-        if not signal_path.exists():
-            print('Skipping subject', subject_id, 'because signal file does not exist:', signal_path.name)
-            continue
-        feature_dicts = _ppg_feature_dicts(
-            signal_path,
-            fs=ppg_sampling_rate('Hb_PPG'),
-            window_seconds=window_seconds,
-            dataset_name='Hb_PPG',
-            center_window_seconds=center_seconds,
-        )
-        if not feature_dicts:
-            print('Skipping subject', subject_id, 'because signal is empty or failed SQA')
-            continue
-        for window_id, raw_ppg_dict in enumerate(feature_dicts):
-            record = {
-                'subject_ID': subject_id,
-                'target': target,
-            }
-            if window_seconds is not None and window_seconds > 0:
-                record['window_ID'] = window_id
-            record.update(raw_ppg_dict)
-            records.append(record)
-        if i == 1 or i == n_files or i % progress_every == 0:
-            print(f'  loaded {i}/{n_files} files ({len(records)} usable)', flush=True)
-
-    if not records:
-        raise RuntimeError(
-            f'No usable rows were found. Check {HB_PPG_INFO_FILE} and matching {csv_dir.name}/*.csv files.'
-        )
-    dataset = pd.DataFrame(records)
-    print(f'Finished PPG extraction: {len(dataset)} usable sample(s)', flush=True)
-    _save_feature_cache(cache_path, dataset, fingerprint)
-    return _attach_Hb_PPG_basic(dataset, root)
-
-
 def _resize_waveform(waveform: np.ndarray, target_length: int, resample: bool) -> np.ndarray:
     if waveform.size >= target_length:
         if resample:
@@ -1197,21 +1030,6 @@ def load_waveform_dataset(
                     include_basic=include_basic,
                     resample=resample,
                     max_samples=max_samples,
-                    center_window_seconds=center,
-                ),
-            )
-        elif layout == 'Hb_PPG':
-            signals, demographics, targets, groups, sessions = _cached_or_build(
-                config_name,
-                root,
-                layout,
-                lambda center: _load_Hb_PPG_waveform_dataset(
-                    root,
-                    signal_length=load_length,
-                    include_basic=include_basic,
-                    resample=resample,
-                    max_samples=max_samples,
-                    ppg_seconds=ppg_seconds,
                     center_window_seconds=center,
                 ),
             )
@@ -1454,89 +1272,6 @@ def _load_IPS_waveform_dataset(
     )
 
 
-def _load_Hb_PPG_waveform_dataset(
-    root: Path,
-    signal_length: int = 0,
-    include_basic: bool = True,
-    resample: bool = False,
-    max_samples: int | None = None,
-    ppg_seconds: float | None = None,
-    center_window_seconds: float | None = None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    center_seconds = (
-        center_window_seconds
-        if center_window_seconds is not None
-        else resolve_ppg_center_window_seconds(ppg_seconds)
-    )
-    if center_seconds:
-        print(f'Center-cropping PPG to {center_seconds:g} s (Hb_PPG)')
-    else:
-        print('Using full on-disk PPG signal (Hb_PPG)')
-
-    pending = []
-    lengths = []
-    for subject_id, target, row in _iter_hb_ppg_rows(root, max_samples=max_samples):
-        signal_path = _hb_ppg_signal_path(root, subject_id)
-        if not signal_path.exists():
-            print('Skipping subject', subject_id, 'because signal file does not exist:', signal_path.name)
-            continue
-
-        if include_basic:
-            keys = basic_feature_keys('Hb_PPG')
-            basic_info_dict = extract_basic_info(row, keys)
-            if keys and not basic_info_dict:
-                continue
-            basic_values = np.asarray(
-                [basic_info_dict[key] for key in keys],
-                dtype=np.float32,
-            )
-        else:
-            basic_values = np.empty(0, dtype=np.float32)
-
-        waveform = read_signal_waveform(
-            signal_path,
-            trim_fractions=ppg_trim_fractions('Hb_PPG'),
-            fs=ppg_sampling_rate('Hb_PPG'),
-            filter_name=ppg_filter('Hb_PPG'),
-            target_fs=ppg_target_fs('Hb_PPG'),
-            center_window_seconds=center_seconds,
-            csv_column=ppg_csv_column('Hb_PPG'),
-        ).astype(np.float32, copy=False)
-        if waveform.size == 0:
-            print('Skipping subject', subject_id, 'because signal is empty')
-            continue
-
-        pending.append((waveform, basic_values, target, subject_id))
-        lengths.append(int(waveform.size))
-
-    if not pending:
-        raise RuntimeError(
-            f'No usable waveform rows were found. Check {HB_PPG_INFO_FILE} and matching '
-            f'{HB_PPG_CSV_DIR}/*.csv files.'
-        )
-
-    target_length = signal_length if signal_length > 0 else int(np.median(lengths))
-    signals = []
-    demographics = []
-    targets = []
-    groups = []
-    sessions = []
-    for waveform, basic_values, target, subject_id in pending:
-        signals.append(_resize_waveform(waveform, target_length, resample=resample))
-        demographics.append(basic_values)
-        targets.append(target)
-        groups.append(subject_id)
-        sessions.append('0')
-
-    return (
-        np.stack(signals, axis=0),
-        np.stack(demographics, axis=0),
-        np.asarray(targets, dtype=np.float32),
-        np.asarray(groups),
-        np.asarray(sessions).astype(str),
-    )
-
-
 def split(dataset: pd.DataFrame, return_groups: bool = False, return_sessions: bool = False):
     feature_columns = [
         column
@@ -1612,7 +1347,7 @@ if __name__ == '__main__':
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--dataset', default='MUST', help='MUST, vitaldb, IPS, or Hb_PPG')
+    parser.add_argument('--dataset', default='MUST', help='MUST, vitaldb, or IPS')
     cli_args = parser.parse_args()
 
     ds = load_dataset(cli_args.dataset)
