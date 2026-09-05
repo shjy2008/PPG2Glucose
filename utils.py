@@ -19,6 +19,8 @@ def mg_dl_to_mmol_l(value: float) -> float:
 def safe_float(value):
     if pd.isna(value):
         return np.nan
+    if isinstance(value, str) and value.strip() in {'', '/', '-'}:
+        return np.nan
     try:
         return float(value)
     except (TypeError, ValueError):

@@ -1,0 +1,984 @@
+\documentclass{article}
+
+% if you need to pass options to natbib, use, e.g.:
+%     \PassOptionsToPackage{numbers, compress}{natbib}
+% before loading neurips_2026
+
+% The authors should use one of these tracks.
+% Before accepting by the NeurIPS conference, select one of the options below.
+% 0. "default" for submission
+\usepackage{neurips_2026}
+% the "default" option is equal to the "main" option, which is used for the Main Track with double-blind reviewing.
+% 1. "main" option is used for the Main Track
+%  \usepackage[main]{neurips_2026}
+% 2. "position" option is used for the Position Paper Track
+%  \usepackage[position]{neurips_2026}
+% 3. "eandd" option is used for the Evaluations & Datasets Track
+ % \usepackage[eandd]{neurips_2026}
+% 4. "creativeai" option is used for the Creative AI Track
+%  \usepackage[creativeai]{neurips_2026}
+% 5. "sglblindworkshop" option is used for the Workshop with single-blind reviewing
+ % \usepackage[sglblindworkshop]{neurips_2026}
+% 6. "dblblindworkshop" option is used for the Workshop with double-blind reviewing
+%  \usepackage[dblblindworkshop]{neurips_2026}
+% 7. "education" option is used for the Education Track
+%  \usepackage[education]{neurips_2026}
+
+
+% After being accepted, the authors should add "final" behind the track to compile a camera-ready version.
+% 1. Main Track
+ % \usepackage[main, final]{neurips_2026}
+% 2. Position Paper Track
+%  \usepackage[position, final]{neurips_2026}
+% 3. Evaluations & Datasets Track
+ % \usepackage[eandd, final]{neurips_2026}
+% 4. Creative AI Track
+%  \usepackage[creativeai, final]{neurips_2026}
+% 5. Workshop with single-blind reviewing
+%  \usepackage[sglblindworkshop, final]{neurips_2026}
+% 6. Workshop with double-blind reviewing
+%  \usepackage[dblblindworkshop, final]{neurips_2026}
+% Note. For the workshop paper template, both \title{} and \workshoptitle{} are required, with the former indicating the paper title shown in the title and the latter indicating the workshop title displayed in the footnote.
+% For workshops (5., 6.), the authors should add the name of the workshop, "\workshoptitle" command is used to set the workshop title.
+% \workshoptitle{WORKSHOP TITLE}
+% 7. Education Track
+% \usepackage[education, final]{neurips_2026}
+
+% "preprint" option is used for arXiv or other preprint submissions
+ % \usepackage[preprint]{neurips_2026}
+
+% to avoid loading the natbib package, add option nonatbib:
+%    \usepackage[nonatbib]{neurips_2026}
+
+\usepackage[utf8]{inputenc} % allow utf-8 input
+\usepackage[T1]{fontenc}    % use 8-bit T1 fonts
+\usepackage{hyperref}       % hyperlinks
+\usepackage{url}            % simple URL typesetting
+\usepackage{booktabs}       % professional-quality tables
+\usepackage{amsfonts}       % blackboard math symbols
+\usepackage{nicefrac}       % compact symbols for 1/2, etc.
+\usepackage{microtype}      % microtypography
+\usepackage{xcolor}         % colors
+
+
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{makecell}
+
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{makecell}
+
+\usepackage{threeparttable}
+
+% Note. For the workshop paper template, both \title{} and \workshoptitle{} are required, with the former indicating the paper title shown in the title and the latter indicating the workshop title displayed in the footnote. 
+\title{Data Leakage in PPG-based Non-invasive Blood Glucose Prediction}
+
+
+% The \author macro works with any number of authors. There are two commands
+% used to separate the names and addresses of multiple authors: \And and \AND.
+%
+% Using \And between authors leaves it to LaTeX to determine where to break the
+% lines. Using \AND forces a line break at that point. So, if LaTeX puts 3 of 4
+% authors names on the first line, and the last on the second line, try using
+% \AND instead of \And before the third author name.
+
+
+\author{%
+  Junyi.~Hippocampus\thanks{Use footnote for providing further information
+    about author (webpage, alternative address)---\emph{not} for acknowledging
+    funding agencies.} \\
+  Department of Computer Science\\
+  Cranberry-Lemon University\\
+  Pittsburgh, PA 15213 \\
+  \texttt{hippo@cs.cranberry-lemon.edu} \\
+  % examples of more authors
+  % \And
+  % Coauthor \\
+  % Affiliation \\
+  % Address \\
+  % \texttt{email} \\
+  % \AND
+  % Coauthor \\
+  % Affiliation \\
+  % Address \\
+  % \texttt{email} \\
+  % \And
+  % Coauthor \\
+  % Affiliation \\
+  % Address \\
+  % \texttt{email} \\
+  % \And
+  % Coauthor \\
+  % Affiliation \\
+  % Address \\
+  % \texttt{email} \\
+}
+
+
+\begin{document}
+
+
+\maketitle
+
+
+\begin{abstract}
+
+Non-invasive blood glucose level (BGL) estimation from photoplethysmography (PPG) has attracted increasing interest, with numerous machine learning and deep learning methods reporting promising performance. However, inconsistent data-splitting strategies may introduce sample dependence and data leakage, leading to overly optimistic estimates of model generalization. This study systematically evaluates the impact of evaluation protocols on PPG-based BGL estimation using three datasets and three representative models, including TinyML, CBHFF, and CatBoost. We compare random train--test splitting (RTTS), subject-wise RTTS (STTS), participant-aware splitting (PAS), leave-some-participants-out (LSPO), and out-of-distribution (OOD) evaluation. Results show that RTTS generally produces the strongest performance, while performance substantially decreases under subject-separated and cross-dataset evaluation. Notably, PAS did not consistently outperform LSPO, indicating that prior exposure to the same participant did not reliably improve prediction performance. Cross-dataset OOD evaluation showed a further decline in generalization, with most settings producing near-zero or negative $R^2$ values. In contrast, Clarke Error Grid results remained consistently high, with 97--100\% of predictions falling within Zones A+B even when regression performance was poor. This mismatch suggests that favorable clinical error-grid results alone may overstate model reliability. Overall, our findings highlight the need for leakage-aware, subject-independent, and cross-dataset evaluation to obtain a more realistic assessment of PPG-based glucose estimation models. Code and reproducibility materials are available at \url{https://anonymous.4open.science/r/PPG2Glucose-06BE/}.
+
+
+\end{abstract}
+
+\section{Introduction}
+
+Diabetes affects millions of people worldwide, posing a major challenge to global public health systems (Saeedi et al., 2019). Chronically elevated blood glucose can substantially damage the vascular system and peripheral nerves throughout the body, leading to severe cardiovascular and cerebrovascular complications as well as acute events that seriously threaten patients' lives (Punthakee et al., 2018). Consequently, regular blood glucose monitoring has proven essential for effective diabetes management.
+
+Conventional blood glucose measurement is typically invasive, relying on finger-prick blood sampling. This approach carries a risk of infection, causes discomfort, and requires consumable test strips and devices (Hina et al., 2022). In recent years, motivated by the relationship between glucose concentration
+and tissue optical properties, including light absorption and scattering,
+researchers have investigated the potential of photoplethysmography (PPG)
+signals for capturing physiological variations associated with blood glucose
+levels (Delbeck et al., 2019). This has motivated growing interest in non-invasive blood glucose estimation based on PPG.
+
+A large number of machine learning and deep learning approaches have been proposed to automate non-invasive glucose estimation from PPG signals (Hina et al., 2022). However, no such method has yet achieved commercial viability, largely due to unresolved challenges in clinical reliability and usability. A key contributing factor is that existing studies rely on different datasets and inconsistent evaluation protocols, particularly with respect to how data are split for training and testing (Ramesh et al., 2026). This inconsistency makes fair comparison across models difficult and, more critically, can mask underlying data leakage that inflates reported performance and obscures true clinical reliability.
+
+In this work, we systematically investigate the impact of different data-splitting strategies on PPG-based non-invasive blood glucose level (BGL) estimation. We focus on data leakage introduced by sample-level random splitting after signal segmentation. To quantify its impact, we design and compare five evaluation protocols:random train-test splitting (RTTS), subject-level train-test splitting (STTS), participant-aware splitting (PAS), leave-some-participants-out (LSPO), and cross-dataset out-of-distribution (OOD) evaluation. Under a unified experimental framework, we reproduce and evaluate two published PPG-based BGL estimation models with publicly available implementations, which helps minimize implementation-related variability and enables a more controlled comparison. In addition, we include a CatBoost-based model using representative handcrafted PPG features as a strong machine-learning baseline, selected based on its consistently competitive performance in our initial model comparisons. All models are evaluated on two public datasets and one private dataset using the same controlled protocols.
+
+
+
+
+The main contributions of this study are as follows:
+
+\begin{itemize}
+
+\item We systematically compare five evaluation protocols, from leakage-prone RTTS to subject-independent LSPO and OOD evaluation, using two published PPG--BGL models and a CatBoost baseline across two public and one private dataset.
+
+\item We demonstrate that sample-level splitting can substantially overestimate generalization, that PAS does not consistently outperform LSPO, and that cross-dataset transfer exhibits severe degradation.
+
+\item We show that Clarke Error Grid Zone A+B, and to a lesser extent MARD, can remain near ceiling even when $R^2$ is near zero or negative, highlighting that clinical error-grid metrics should not be interpreted in isolation.
+
+\end{itemize}
+
+\section{Related Work}
+
+Table~\ref{tab:related_work} summarizes published PPG-based BGL estimation approaches selected to represent different data-splitting strategies used in the literature. 
+\begin{table}[H]
+\centering
+\caption{Comparison of related work. This comparison highlights the diversity of data-splitting strategies used in PPG-based blood glucose estimation.}
+\label{tab:related_work}
+
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.15}
+
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{lclclcccccc}
+\toprule
+\textbf{Paper} &
+\textbf{Signal} &
+\textbf{Split} &
+\textbf{Subjects} &
+\textbf{Method} &
+\textbf{MAE} &
+\textbf{RMSE} &
+\textbf{$R^2$} &
+\textbf{MARD} &
+\textbf{CEG A+B} &
+\textbf{CEG A} \\
+\midrule
+
+Zeynali et al., 2025&
+PPG &
+RTTS &
+6388 &
+TinyML &
+1.03 &
+1.53 &
+0.40 &
+15.53\% &
+98.50\% &
+72.60\% \\
+
+Zeynali et al., 2025&
+PPG &
+OOD &
+23 &
+TinyML &
+0.82 &
+1.09 &
+N/R &
+12.80\% &
+100\% &
+76.60\% \\
+
+Ali et al., 2025&
+PPG &
+RTTS &
+21 &
+CBHFF &
+N/R &
+1.67 &
+N/R &
+17.88\% &
+98.80\% &
+61.40\% \\
+
+Sen Gupta et al., 2021&
+PPG &
+LSPO &
+26 &
+XGBoost &
+0.46 &
+N/R &
+N/R &
+N/R &
+100\% &
+96.15\% \\
+
+
+
+Prabha et al., 2022&
+PPG &
+LSPO  &
+217 &
+XGBR + FS &
+0.10 &
+0.31\tnote{a} &
+0.99 &
+N/R &
+100\% &
+98.97\% \\
+
+
+
+Hammour et al., 2023 &
+PPG &
+PAS &
+4 &
+ERT &
+N/R &
+1.44 &
+0.37 &
+14.51\% &
+100\% &
+82.09\% \\
+
+Hossain et al., 2019&
+PPG &
+RTTS &
+30 &
+CNN &
+N/R &
+0.39\tnote{b} &
+N/R &
+N/R &
+N/R &
+N/R \\
+
+Chu et al., 2021&
+PPG,HbA1c &
+RTTS &
+856 &
+1D CNN &
+0.49 &
+0.69 &
+0.71 &
+8\% &
+100\% &
+94.30\% \\
+
+Ad{\i}g{\"u}zel et al., 2024&
+PPG &
+N/R &
+217 &
+CatBoost &
+1.40 &
+2.17 &
+0.71 &
+N/R &
+N/R &
+N/R \\
+
+\bottomrule
+\end{tabular}%
+}
+
+\vspace{2pt}
+
+\begin{minipage}{\columnwidth}
+\scriptsize
+\textit{Note:} MAE and RMSE are reported in mmol/L; values originally published in mg/dL were converted using $1\,\mathrm{mmol/L}=18\,\mathrm{mg/dL}$. 
+RMSE can be obtained as $\sqrt{\mathrm{MSE}}$.
+N/R indicates not reported. 
+FS denotes feature selection. 
+ERT denotes ensemble regression trees.
+\end{minipage}
+
+\end{table}
+
+The performance values shown in the table are those originally reported in the corresponding publications. Most studies report conventional machine-learning performance metrics together with clinical validity assessed using Clarke Error Grid (CEG) analysis. Several studies, including Zeynali et al. (2025), Sen Gupta et al. (2021), and Prabha et al. (2022), reported that nearly 100\% of predictions fell within the clinically acceptable regions of the Clarke Error Grid, which at first glance suggests highly promising performance for non-invasive BGL estimation. However, closer inspection of these machine-learning implementations reveals potential data leakage. Zeynali et al. (2025) constructed the training and test sets at the segment level after signal segmentation, allowing segments from the same recording, including potentially overlapping windows, to appear in both sets and thereby introducing a risk of data leakage. In addition, using the same dataset for model training, hyperparameter tuning, and final performance reporting without an independent validation or test set may further lead to overly optimistic performance estimates. This concern has also been noted in earlier PPG-based BGL estimation studies (Chu et al., 2021, Ad{\i}g{\"u}zel et al., 2024).
+
+Such data leakage can inflate reported performance and make it difficult to assess the true effectiveness and generalizability of the models. Therefore, it is necessary to evaluate PPG-based BGL prediction models under multiple leakage-aware data-splitting protocols. Among the studies in Table~\ref{tab:related_work}, only Zeynali et al.\ (2025) and Ali et al.\ (2025) released source code.
+
+
+
+\section{Background}
+
+\subsection{Data Leakage}
+\label{sec:data_leakage_methods}
+
+We identify two common sources of data leakage in PPG-based glucose prediction studies.
+
+\textbf{1. Segmentation followed by sample-wise splitting.}
+A PPG recording is first segmented into short windows, which are then randomly assigned to the training and test sets at the window level. Consequently, highly correlated windows from the same recording may appear in both sets, leading to overly optimistic performance estimates, as demonstrated in Section~\ref{sec:performance}.
+
+\textbf{2. Data augmentation leakage.}
+When augmentation is applied before data splitting, near-duplicate versions of the same original signal may be distributed across training and test sets, allowing the model to be evaluated on samples highly similar to those seen during training (Maleki et al., 2022).
+
+Both mechanisms arise from insufficient isolation between training and test data at the recording or participant level. Therefore, we evaluate model performance under different data-splitting strategies to systematically investigate the impact of train--test dependency and data leakage.
+
+\subsection{Metrics}
+Table~\ref{tab:evaluation_metrics} summarizes the evaluation metrics used in this study, together with the aspect of performance captured by each metric and its main limitation. We include both regression-based metrics (MAE, RMSE, $R^2$, MARD, and Pearson's $r$) and clinically oriented measures (accuracy and Clarke Error Grid zones) to provide a more comprehensive assessment of model performance. Since no single metric fully reflects both numerical accuracy and clinical relevance, results are interpreted jointly across multiple metrics.
+
+
+
+\begin{table}[H]
+\centering
+\caption{Evaluation metrics used in this work, including what each metric captures and its blind spot.}
+\label{tab:evaluation_metrics}
+
+\resizebox{\columnwidth}{!}{%
+\begin{tabular}{llll}
+\toprule
+Metric & Definition & Captures & Blind spot \\
+\midrule
+
+MAE & Mean absolute error 
+    & Absolute prediction error 
+    & Ignores error direction; scale-dependent \\
+
+RMSE & Root mean square error 
+     & Overall error; penalizes large deviations 
+     & Sensitive to outliers \\
+
+$R^2$ & Coefficient of determination 
+      & Variance explained beyond mean prediction 
+      & Sensitive to target variance (Shalizi et al., 2013) \\
+
+Acc & Threshold-based accuracy 
+    & \makecell[l]{Percentage satisfying: error $<0.8$ mmol/L \\ if reference $\leq 5.55$ mmol/L; \\otherwise relative error $<15\%$} 
+    & Threshold-based; may mask regression error magnitude \\
+
+Zone A & Clarke Error Grid 
+       & Clinically accurate predictions 
+       & May hide regression error \\
+
+Zone B & Clarke Error Grid 
+       & Clinically acceptable predictions 
+       & Broad acceptance range \\
+
+MARD & Mean absolute relative difference 
+     & Relative prediction error 
+     & Inflated at low glucose levels (Heinemann et al., 2020)\\
+
+Pearson's $r$ & Pearson correlation coefficient 
+              & Linear agreement in variation 
+              & High correlation does not imply accuracy \\
+
+\bottomrule
+\end{tabular}%
+}
+\end{table}
+
+\section{Dataset}
+
+Our pipeline incorporates two public physiological datasets, VitalDB (Lee et al., 2022) and MUST (Kermani et al., 2023), and one private dataset, IPS-PPG. Their main collection characteristics are summarized in Table~\ref{tab:dataset_collection}.
+
+\textbf{VitalDB.}
+VitalDB contains multimodal physiological recordings collected during non-cardiac surgery at Seoul National University Hospital, Korea. In this study, 7,506 valid PPG--glucose pairs from 3,097 participants were included. The dataset covers a broad clinical population and a wide glucose range, making it suitable for large-scale model evaluation.
+
+\textbf{MUST.}
+MUST was developed for PPG-based blood glucose estimation and contains 67 recording sessions from 23 participants. Blood glucose values ranged from 88 to 183 mg/dL. Its repeated measurements per participant make it suitable for participant-aware evaluation and cross-dataset validation.
+
+\textbf{IPS-PPG.}
+IPS-PPG is a private dataset collected under institutional ethical approval. The dataset contains fasting PPG and paired blood glucose measurements from 260 participants, collected under a standardized protocol.
+
+\begin{table}[H]
+\centering
+\caption{Data collection characteristics of the three PPG datasets.}
+\label{tab:dataset_collection}
+\scriptsize
+% \tiny
+\small
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.0}
+
+% \resizebox{\columnwidth}{!}{%
+\begin{tabular}{lcccccc}
+\toprule
+\textbf{Dataset} &
+\textbf{Subjects} &
+\makecell{\textbf{Valid}\\\textbf{Recordings}} &
+\makecell{\textbf{Sampling}\\\textbf{Rate}} &
+\makecell{\textbf{Wave-}\\\textbf{length}} &
+\textbf{Device} &
+\makecell{\textbf{Sample}\\\textbf{Length}} \\
+\midrule
+
+IPS-PPG &
+260 &
+258 &
+200 Hz &
+950 nm &
+HKG-07 C sensor &
+60 s \\
+
+MUST &
+23 &
+67 &
+2175 Hz &
+550 nm &
+Green LED transmitter &
+10 s \\
+
+VitalDB &
+3097 &
+7506 &
+500 Hz &
+N/R &
+Tram-Rac 4A (SNUADC) &
+60 s \\
+
+\bottomrule
+\end{tabular}
+
+\end{table}
+
+
+\section{Pipeline}
+\subsection{Evaluation Protocols}
+\label{sec:evaluation_protocols}
+We consider five evaluation protocols with progressively stricter separation.
+The key principle is to separate training and test data at the recording or participant level. 
+
+\textit{Random train--test split (RTTS).}
+PPG windows are randomly split into training and test sets, allowing windows from the same recording to appear in both sets. This setting serves as a leakage-prone baseline.
+
+\textit{Subject-level train–test split (STTS).} Each PPG recording is first segmented into windows, while the training and test sets are split at the subject level, ensuring that all windows from the same subject are assigned exclusively to either the training or test set.
+
+\textit{Participant-aware split (PAS).}
+This setting evaluates personalized prediction, i.e., whether a model can predict a new recording from a participant whose data have already been observed during training. No further window segmentation is performed in this setting. For participants with multiple recordings, one recording is held out for testing and the remaining sessions from the same participant stay in training. PAS is used only on MUST and VitalDB, the only datasets here with multiple independent PPG recordings per participant; IPS-PPG has one recording per person, so PAS is not applicable.
+
+\textit{Leave-Some-Participants-Out (LSPO).}
+Training and test sets contain non-overlapping participants. This protocol evaluates generalization to completely unseen participants and removes participant overlap between the two sets. No further window segmentation is performed in this setting.
+
+\textit{Out-of-Distribution generalization (OOD).}
+The model is trained on one dataset and evaluated on a different dataset. This protocol assesses whether the learned relationship generalizes across datasets and acquisition domains. No further window segmentation is performed in this setting. 
+%OOD experiments using MUST as the source training dataset, such as MUST$\rightarrow$VitalDB and MUST$\rightarrow$IPS-PPG, were not conducted because MUST contains substantially fewer participants and recordings than the other datasets.
+
+
+\subsection{Methodology}
+
+\subsubsection{Preprocessing}
+We used the recorded PPG waveforms without additional filtering or denoising. The same pipeline was applied under all evaluation protocols. For VitalDB, each recording was a 60-s PPG window centered on the blood-collection time. Under RTTS and STTS, recordings were segmented into non-overlapping 10-s windows (1-s windows on MUST because its recordings are short). PAS, LSPO, and OOD used each entire recording as a single sample.
+
+
+\subsubsection{CatBoost baseline}
+An additional CatBoost-based model was included as a controlled baseline to assess the effects of different data-splitting and evaluation protocols independently of the architectures adopted in previously published methods. CatBoost was selected because it achieved the strongest performance among the conventional machine-learning algorithms examined in our preliminary experiments. A machine-learning approach based on handcrafted PPG features was deliberately adopted, rather than introducing an additional deep-learning architecture, to provide an interpretable feature representation and to reduce variability associated with model architecture and learned representations. This design enables a more focused assessment of the impact of evaluation protocols on reported performance.
+
+A total of 39 handcrafted features were extracted from each PPG segment, as summarized in Table~\ref{tab:ppg_features}. The features cover six complementary aspects of the signal: overall amplitude distribution, temporal derivatives, pulse morphology, frequency-domain characteristics, periodicity, and signal stability.
+
+\begin{table}[H]
+\centering
+\caption{Handcrafted PPG features used by CatBoost.}
+\label{tab:ppg_features}
+\small
+
+\begin{tabular}{p{2.8cm} c p{8.2cm}}
+\toprule
+\textbf{Feature Group} & \textbf{No.} & \textbf{Features} \\
+\midrule
+
+Distribution features 
+& 12 
+& Length, mean, median, standard deviation, range, interquartile range, coefficient of variation, RMS, absolute mean, skewness, kurtosis, and mean crossing count \\
+
+\midrule
+
+Derivative features 
+& 4 
+& First-derivative mean and standard deviation; second-derivative mean and standard deviation \\
+
+\midrule
+
+Pulse features 
+& 11 
+& Peak count, beat density, mean IBI, IBI standard deviation, RMS IBI differences, peak amplitude mean, peak amplitude standard deviation, peak amplitude coefficient of variation, maximum slope, mean rise slope, and perfusion index \\
+
+\midrule
+
+Frequency-domain features 
+& 6 
+& Dominant frequency, spectral entropy, low-band power, mid-band power, high-band power, and signal-to-noise ratio \\
+
+\midrule
+
+Periodic features 
+& 3 
+& Autocorrelation peak interval, autocorrelation peak value, and heart rate \\
+
+\midrule
+
+Segment features 
+& 3 
+& Half mean difference, half standard-deviation ratio, and edge mean difference \\
+
+\bottomrule
+\end{tabular}
+\end{table}
+
+
+
+
+\section{Results}
+\subsection{Experiment Implement}
+Within-dataset experiments used five-fold cross-validation; OOD experiments trained on the full source dataset and evaluated on the full target dataset. TinyML and CBHFF were trained on NVIDIA L4 GPUs, and CatBoost on CPU.
+
+\subsection{Baseline Models}
+We selected two published PPG-based BGL estimation models with publicly available source code. The availability of the original implementations helps reduce variability introduced by reimplementation and enables a more controlled comparison under a unified experimental framework.
+
+\textit{TinyML (Zeynali et al., 2025).} A 1D ResNet34 was used for non-invasive BGL estimation from raw PPG signals and was further optimized for TinyML deployment.
+
+\textit{CBHFF (Ali et al., 2025).} A cascaded BiLSTM network with multi-view attention was used for PPG-based blood glucose estimation to capture fine-grained and higher-order features.
+
+\subsection{Performance}
+\label{sec:performance}
+
+Table~\ref{tab:main_results} summarizes the within-dataset performance of the representative models under different data-splitting protocols, while Table~\ref{tab:ood_results} reports the OOD evaluation results.
+
+
+\textbf{Performance across data-splitting protocols.}
+Across the three datasets and all evaluated models, RTTS generally produced the strongest performance, while subject-separated protocols showed lower performance. On IPS-PPG, CatBoost achieved an $R^2$ of 0.5745 under RTTS, compared with 0.3925 under STTS and 0.4285 under LSPO. On MUST, its $R^2$ decreased from 0.2362 under RTTS to -0.3468 under STTS and 0.0003 under LSPO.
+
+PAS did not consistently outperform LSPO. On VitalDB, CatBoost achieved similar $R^2$ values under PAS and LSPO (0.0342 vs.\ 0.0428), with similar trends observed for TinyML and CBHFF. On MUST, CatBoost achieved $R^2=-0.9315$ under PAS compared with 0.0003 under LSPO.
+
+\textbf{CEG and MARD analysis.}
+CEG results remained high despite substantial variation in regression performance. For MUST and IPS-PPG, Zone A+B reached 100\% for nearly all models and splitting protocols, while VitalDB remained at approximately 97\%. MARD also varied less markedly than $R^2$ across different splitting protocols. For example, on MUST, MARD generally remained within approximately 8--14\%, despite several settings yielding near-zero or negative $R^2$ values.
+
+\textbf{OOD generalization.}
+Cross-dataset evaluation in Table~\ref{tab:ood_results} was substantially weaker than within-dataset evaluation. Of the 18 model--transfer combinations, 16 yielded negative $R^2$, and Pearson's $r$ was near zero or negative in most settings. The only clearly positive transfer was VitalDB$\rightarrow$IPS-PPG with CatBoost ($R^2=0.1907$, $r=0.6102$); TinyML and CBHFF also yielded negative $R^2$ on the same pair. Despite the weak regression performance, Zone A+B remained between approximately 97\% and 100\% across the OOD evaluations.
+
+
+
+{\small
+\setlength{\tabcolsep}{3pt}
+\begin{longtable}{llccccccccc}
+\caption{Performance comparison under different data-splitting protocols. Bold values indicate the best result for each metric per dataset. Standard deviations are omitted due to space and are available in our repository. N/A: PAS is not applicable on IPS-PPG (one recording per participant).}
+\label{tab:main_results} \\
+
+\toprule
+Model & Split & MAE & RMSE & $R^2$ & Accuracy & Zone A & Zone B & Zone A+B & MARD & Pearson's $r$ \\
+& & \multicolumn{2}{c}{(mmol/L)} & & (\%) & (\%) & (\%) & (\%) & (\%) & \\
+\midrule
+\endfirsthead
+
+\multicolumn{11}{c}
+{{\tablename\ \thetable{} -- continued from previous page}} \\
+\toprule
+Model & Split & MAE & RMSE & $R^2$ & Accuracy & Zone A & Zone B & Zone A+B & MARD & Pearson's $r$ \\
+& & \multicolumn{2}{c}{(mmol/L)} & & (\%) & (\%) & (\%) & (\%) & (\%) & \\
+\midrule
+\endhead
+
+\midrule
+\multicolumn{11}{r}{{Continued on next page}} \\
+\endfoot
+
+\bottomrule
+\endlastfoot
+
+
+% =========================
+% VitalDB
+% =========================
+
+\multicolumn{11}{c}{\textbf{VitalDB}} \\
+\midrule
+
+TinyML
+& RTTS
+& 1.4123 & 1.9224 & 0.0667
+& 42.75 & 55.13 & 42.29 & 97.43 & 21.76 & 0.2634 \\
+
+& STTS
+& 1.4256 & 1.9498 & 0.0370
+& 42.26 & 54.79 & 42.64 & 97.43 & 21.87 & 0.1966 \\
+
+& PAS
+& 1.5098 & 2.0914 & 0.0432
+& 42.03 & 54.93 & 41.82 & 96.74 & 22.56 & 0.2107 \\
+
+& LSPO
+& 1.4191 & 1.9565 & 0.0303
+& 43.00 & 55.29 & 42.13 & 97.43 & 21.57 & 0.1837 \\
+
+\addlinespace
+
+CBHFF
+& RTTS
+& 1.4705 & 1.9899 & -0.0001
+& 39.73 & 52.28 & 45.15 & 97.43 & 22.69 & -0.0016 \\
+
+& STTS
+& 1.4559 & 1.9807 & 0.0068
+& 40.77 & 52.72 & 44.70 & 97.43 & 22.33 & 0.0893 \\
+
+& PAS
+& 1.5254 & 2.1106 & 0.0264
+& 41.82 & 53.63 & 43.11 & 96.74 & 22.74 & 0.1869 \\
+
+& LSPO
+& 1.4457 & 1.9660 & 0.0209
+& 41.42 & 53.35 & 44.08 & 97.43 & 22.21 & 0.1513 \\
+
+\addlinespace
+
+CatBoost
+& RTTS
+& \textbf{1.2982} & \textbf{1.9062} & \textbf{0.0823}
+& \textbf{51.21} & \textbf{62.59} & \textbf{34.83} & 97.43 & \textbf{18.58} & \textbf{0.3696} \\
+
+& STTS
+& 1.3476 & 1.9518 & 0.0342
+& 49.12 & 60.65 & 36.78 & 97.43 & 19.34 & 0.2848 \\
+
+& PAS
+& 1.4328 & 2.0908 & 0.0342
+& 48.37 & 59.73 & 37.00 & 96.73 & 19.86 & 0.3436 \\
+
+& LSPO
+& 1.3401 & 1.9430 & 0.0428
+& 49.45 & 60.88 & 36.54 & 97.43 & 19.22 & 0.3005 \\
+
+
+% =========================
+% MUST
+% =========================
+
+\midrule
+\multicolumn{11}{c}{\textbf{MUST}} \\
+\midrule
+
+TinyML
+& RTTS
+& 0.7335 & 0.9909 & 0.0695
+& 71.55 & 85.82 & 14.18 & 100.00 & 11.14 & 0.3573 \\
+
+& STTS
+& 0.8377 & 1.0576 & -0.3119
+& 65.80 & 81.86 & 18.14 & 100.00 & 12.87 & -0.2089 \\
+
+& PAS
+& 0.8668 & 1.0350 & -4.0480
+& 61.11 & 80.76 & 19.24 & 100.00 & 13.74 & -0.1672 \\
+
+& LSPO
+& 0.8963 & 1.0976 & -0.4476
+& 61.38 & 76.92 & 23.08 & 100.00 & 13.83 & -0.2654 \\
+
+\addlinespace
+
+CBHFF
+& RTTS
+& 0.7937 & 1.0327 & -0.0104
+& 70.48 & 85.91 & 14.09 & 100.00 & 12.03 & -0.0149 \\
+
+& STTS
+& 0.8153 & 1.0267 & -0.2234
+& 68.39 & 86.25 & 13.75 & 100.00 & 12.41 & -0.3634 \\
+
+& PAS
+& 0.7831 & 0.9713 & -1.2585
+& 71.23 & 87.83 & 12.17 & 100.00 & 12.16 & -0.2861 \\
+
+& LSPO
+& 0.8096 & 1.0154 & -0.1773
+& 67.14 & 86.15 & 13.85 & 100.00 & 12.31 & -0.2784 \\
+
+\addlinespace
+
+CatBoost
+& RTTS
+& \textbf{0.5686} & \textbf{0.8986} & \textbf{0.2362}
+& \textbf{81.34} & 90.69 & 9.31 & 100.00 & \textbf{8.21} & \textbf{0.5488} \\
+
+& STTS
+& 0.8204 & 1.0984 & -0.3468
+& 64.64 & 79.85 & 20.15 & 100.00 & 11.97 & -0.0172 \\
+
+& PAS
+& 0.7104 & 0.9182 & -0.9315
+& 71.62 & \textbf{92.43} & \textbf{7.57} & 100.00 & 10.78 & 0.3124 \\
+
+& LSPO
+& 0.7075 & 0.9474 & 0.0003
+& 73.69 & 89.43 & 10.57 & 100.00 & 10.49 & 0.3551 \\
+
+
+% =========================
+% IPS-PPG
+% =========================
+
+\midrule
+\multicolumn{11}{c}{\textbf{IPS-PPG}} \\
+\midrule
+
+TinyML
+& RTTS
+& 0.8033 & 1.2021 & 0.2207
+& 69.57 & 77.66 & 22.34 & 100.00 & 13.16 & 0.5393 \\
+
+& STTS
+& 0.8966 & 1.3252 & 0.0122
+& 65.67 & 74.02 & 25.98 & 100.00 & 14.65 & 0.3365 \\
+
+& PAS
+& N/A & N/A & N/A & N/A
+& N/A & N/A & N/A & N/A & N/A \\
+
+& LSPO
+& 1.0850 & 1.4247 & -0.1421
+& 46.32 & 58.33 & 41.67 & 100.00 & 18.54 & -0.0191 \\
+
+\addlinespace
+
+CBHFF
+& RTTS
+& 0.9017 & 1.2923 & 0.1010
+& 62.22 & 71.12 & 28.88 & 100.00 & 14.97 & 0.3964 \\
+
+& STTS
+& 0.9417 & 1.3204 & 0.0283
+& 59.75 & 68.82 & 31.18 & 100.00 & 15.83 & 0.3570 \\
+
+& PAS
+& N/A & N/A & N/A & N/A
+& N/A & N/A & N/A & N/A & N/A \\
+
+& LSPO
+& 1.0437 & 1.3820 & -0.0669
+& 50.09 & 62.49 & 37.51 & 100.00 & 17.75 & 0.1693 \\
+
+\addlinespace
+
+CatBoost
+& RTTS
+& \textbf{0.4360} & \textbf{0.8698} & \textbf{0.5745}
+& \textbf{91.46} & \textbf{93.55} & \textbf{6.45} & 100.00 & \textbf{6.57} & \textbf{0.7833} \\
+
+& STTS
+& 0.5945 & 1.0181 & 0.3925
+& 85.71 & 89.59 & 10.41 & 100.00 & 9.18 & 0.6420 \\
+
+& PAS
+& N/A & N/A & N/A & N/A
+& N/A & N/A & N/A & N/A & N/A \\
+
+& LSPO
+& 0.5786 & 0.9900 & 0.4285
+& 85.16 & 90.40 & 9.60 & 100.00 & 8.97 & 0.6765 \\
+
+\end{longtable}
+}
+
+
+
+
+
+\begin{table}[H]
+\centering
+\caption{Results of out-of-distribution (OOD) evaluations.}
+\label{tab:ood_results}
+\resizebox{\columnwidth}{!}{
+\begin{tabular}{llccccccccc}
+\toprule
+Dataset & Method & MAE & RMSE & $R^2$ & Accuracy & Zone A & Zone B & Zone A+B & MARD & Pearson's $r$ \\
+& & \multicolumn{2}{c}{(mmol/L)} & & (\%) & (\%) & (\%) & (\%) & (\%) & \\
+\midrule
+
+\multirow{3}{*}{VitalDB $\rightarrow$ MUST}
+& TinyML & 1.0642 & 1.2436 & -0.4491 & 43.28 & 56.72 & 43.28 & 100.00 & 17.54 & -0.1275 \\
+& CBHFF    & 1.0463 & 1.2261 & -0.4085 & 38.81 & 64.18 & 35.82 & 100.00 & 17.24 & 0.0933 \\
+& CatBoost & \textbf{0.7997} & \textbf{1.1511} & \textbf{-0.2414} & \textbf{67.16} & \textbf{79.10} & 20.90 & 100.00 & \textbf{11.34} & \textbf{0.1601} \\
+\midrule
+
+\multirow{3}{*}{VitalDB $\rightarrow$ IPS-PPG}
+& TinyML & 1.2318 & 1.5083 & -0.2148 & 38.37 & 48.84 & 51.16 & 100.00 & 22.14 & 0.1402 \\
+& CBHFF    & 1.3406 & 1.5517 & -0.2858 & 24.03 & 35.27 & 64.73 & 100.00 & 24.72 & 0.2518 \\
+& CatBoost & \textbf{0.9432} & \textbf{1.2101} & \textbf{0.1907} & \textbf{53.17} & \textbf{62.70} & 37.30 & 100.00 & \textbf{16.81} & \textbf{0.6102} \\
+\midrule
+
+\multirow{3}{*}{MUST $\rightarrow$ VitalDB}
+& TinyML & 1.4223 & 2.0348 & -0.0456 & \textbf{44.61} & \textbf{56.77} & 40.65 & 97.43 & \textbf{20.61} & -0.0567 \\
+& CBHFF    & \textbf{1.4194} & 2.0217 & -0.0321 & 43.95 & 55.91 & 41.52 & 97.43 & 20.70 & -0.0436 \\
+& CatBoost & 1.4823 & \textbf{2.0023} & \textbf{-0.0124} & 39.67 & 51.84 & 45.58 & 97.43 & 22.85 & \textbf{-0.0219} \\
+\midrule
+
+\multirow{3}{*}{MUST $\rightarrow$ IPS-PPG}
+& TinyML & \textbf{1.2772} & \textbf{1.4727} & \textbf{-0.3720} & \textbf{23.12} & \textbf{35.84} & 64.16 & 100.00 & \textbf{23.91} & -0.0504 \\
+& CBHFF    & 1.3394 & 1.5220 & -0.4654 & 20.23 & 33.53 & 66.47 & 100.00 & 25.29 & -0.0208 \\
+& CatBoost & 1.4741 & 1.6418 & -0.4900 & 18.25 & 28.17 & 71.83 & 100.00 & 27.53 & \textbf{0.1772} \\
+\midrule
+
+\multirow{3}{*}{IPS-PPG $\rightarrow$ MUST}
+& TinyML & \textbf{0.7448} & \textbf{1.1156} & \textbf{-0.1661} & \textbf{73.13} & \textbf{86.57} & 13.43 & 100.00 & \textbf{10.62} & \textbf{0.2099} \\
+& CBHFF    & 0.7723 & 1.1262 & -0.1883 & 65.67 & \textbf{86.57} & 13.43 & 100.00 & 11.04 & 0.1075 \\
+& CatBoost & 0.9087 & 1.3144 & -0.6187 & 62.69 & 68.66 & 31.34 & 100.00 & 12.70 & 0.1288 \\
+\midrule
+
+\multirow{3}{*}{IPS-PPG $\rightarrow$ VitalDB}
+& TinyML & 1.5717 & 2.0406 & -0.0515 & 36.38 & 47.30 & 50.13 & 97.43 & 25.16 & 0.0651 \\
+& CBHFF    & \textbf{1.4689} & 2.0183 & -0.0287 & \textbf{41.16} & \textbf{53.85} & 43.57 & 97.43 & \textbf{22.25} & 0.0027 \\
+& CatBoost & 1.4991 & \textbf{1.9614} & \textbf{0.0285} & 37.68 & 50.03 & 47.39 & 97.43 & 23.84 & \textbf{0.2170} \\
+\bottomrule
+
+\end{tabular}
+}
+\end{table}
+
+
+
+
+\section{Discussion}
+
+Our findings show that evaluation methodology has a substantial impact on the reported performance of PPG-based BGL estimation models and on how their generalization ability is interpreted.
+
+\textit{Data leakage and sample dependence.}
+The consistently stronger performance under RTTS suggests that random sample-level splitting can produce optimistic estimates of model performance. PPG segments originating from the same recording or participant can share subject-specific physiological characteristics, acquisition conditions, and signal morphology. When correlated samples are distributed across both training and test sets, models may partly exploit these shared characteristics rather than learn a generalizable relationship between PPG and blood glucose. The reduction in performance under STTS and LSPO therefore highlights the importance of separating participants when the intended application involves prediction for unseen individuals.
+
+\textit{Limited benefit of participant-specific exposure.}
+The absence of a consistent advantage for PAS over LSPO is also noteworthy. Although PAS allows the model to observe data from the target participant during training, this prior exposure did not reliably improve subsequent prediction. This may indicate that participant-specific PPG characteristics are not sufficiently stable across recordings, potentially because of changes in physiological state, measurement conditions, or sensor placement. Therefore, subject overlap alone should not be interpreted as evidence that a model can provide reliable personalized glucose estimation.
+
+\textit{Limited cross-dataset generalization.}
+The poor OOD performance indicates that the models also have difficulty transferring across datasets. Differences in participant populations, sensor hardware, sampling rates, acquisition protocols, and glucose distributions may introduce substantial domain shifts. The predominantly negative $R^2$ values suggest that the models may rely partly on dataset-specific characteristics rather than learning a robust physiological relationship that transfers across acquisition environments. Cross-dataset evaluation is therefore important for assessing whether a model has practical generalization beyond the dataset on which it was developed.
+
+\textit{Limitations of clinical error-grid metrics.}
+The large discrepancy between CEG and regression metrics provides another important finding. CEG is designed to assess the potential clinical consequences of prediction errors rather than how well a model captures variation in glucose values. As a result, predictions concentrated around a central glucose range may still fall within Zones A and B even when the model has little ability to track true glucose variation. This explains why Zone A+B remained close to 100\% in many settings where $R^2$ was near zero or negative.
+
+MARD showed a similar, although less pronounced, pattern. These findings suggest that favorable CEG or MARD results should not be interpreted in isolation as evidence of accurate glucose estimation. A more complete evaluation should combine clinical metrics with MAE, RMSE, $R^2$, Pearson correlation, and appropriate baseline comparisons.
+
+Overall, the results emphasize that reliable evaluation of PPG-based BGL estimation requires leakage-aware subject-level splitting, independent testing, and cross-dataset validation. Without these controls, reported performance may reflect characteristics of the evaluation protocol rather than the true generalization capability of the model.
+
+
+
+
+
+
+
+\section{Limitations}
+
+\textit{Perioperative data.}
+VitalDB was collected during surgery under anesthesia, which may affect the PPG signals and limit generalizability to other settings.
+
+\textit{Limited model coverage.}
+Only a small number of representative models were evaluated, and the observed results may partly depend on model choice and implementation.
+
+
+
+
+
+\section{Future Directions}
+
+\textit{Identifying the root cause.}
+Future work should explore more robust modelling strategies, including frequency-domain deep learning, data augmentation, and multimodal approaches that combine PPG with other physiological signals. These studies may help determine whether the observed limitations mainly arise from model design, dataset characteristics, or the intrinsic difficulty of estimating blood glucose from PPG.
+
+\textit{Standardized evaluation.}
+Future studies should also adopt standardized leakage-aware evaluation protocols, including subject-independent and cross-dataset testing. Consistent evaluation across datasets and models would enable fairer comparison and provide a more reliable assessment of real-world generalizability.
+
+
+\section{Conclusion}
+This work presents a leakage-aware evaluation pipeline for PPG-based BGL estimation and compares the performance of two representative models on two published datasets and one clinical dataset. We also include a CatBoost-based model with handcrafted PPG features as a strong machine-learning baseline, which generally outperformed the two deep learning models. Five evaluation protocols were compared, from leakage-prone RTTS to subject-independent LSPO and cross-dataset OOD. Results show that current research overestimates the generalization of ML models due to multiple levels of data leakage. Additionally, we show that ML approaches for BGL estimation studies should focus more on implementing a robust ML pipeline that follows best practices before evaluating clinical metrics, to develop applications with practical utility. Future research should validate the viability of PPG-based BGL estimation applications and also develop generalizable models.
+
+
+
+
+\section{References}
+[1] Saeedi, P., Petersohn, I., Salpea, P., et al.\ (2019)
+Global and regional diabetes prevalence estimates for 2019 and projections for 2030 and 2045:
+Results from the International Diabetes Federation Diabetes Atlas.
+{\it Diabetes Research and Clinical Practice} {\bf 157}:107843.
+
+[2] Punthakee, Z., Goldenberg, R.\ \& Katz, P.\ (2018)
+Definition, classification and diagnosis of diabetes, prediabetes and metabolic syndrome.
+{\it Canadian Journal of Diabetes} {\bf 42}:S10--S15.
+
+[3] Hina, A.\ \& Saadeh, W.\ (2022)
+Noninvasive blood glucose monitoring systems using near-infrared technology---A review.
+{\it Sensors} {\bf 22}(13):4855.
+
+[4] Delbeck, S., Vahlsing, T., Leonhardt, S., et al.\ (2019)
+Non-invasive monitoring of blood glucose using optical methods for skin spectroscopy---opportunities and recent advances.
+{\it Analytical and Bioanalytical Chemistry} {\bf 411}(1):63--77.
+
+[5] Ramesh, S., Neufeld, M., Küttner, M., et al.\ (2026)
+Reassessing the feasibility of PPG-based non-invasive blood glucose level estimation.
+{\it arXiv preprint arXiv:2608.01820}.
+
+[6] Zeynali, M., Alipour, K., Tarvirdizadeh, B., et al.\ (2025)
+Non-invasive blood glucose monitoring using PPG signals with various deep learning models and implementation using TinyML.
+{\it Scientific Reports} {\bf 15}(1):581.
+
+[7] Gupta, S.S., Kwon, T.H., Hossain, S., et al.\ (2021)
+Towards non-invasive blood glucose measurement using machine learning: An all-purpose PPG system design.
+{\it Biomedical Signal Processing and Control} {\bf 68}:102706.
+
+[8] Chu, J., Yang, W.T., Lu, W.R., et al.\ (2021)
+90\% accuracy for photoplethysmography-based non-invasive blood glucose prediction by deep learning with cohort arrangement and quarterly measured HbA1c.
+{\it Sensors} {\bf 21}(23):7815.
+
+[9] Prabha, A., Yadav, J., Rani, A., et al.\ (2022)
+Intelligent estimation of blood glucose level using wristband PPG signal and physiological parameters.
+{\it Biomedical Signal Processing and Control} {\bf 78}:103876.
+
+[10] Adigüzel, G., Şentürk, Ü.\ \& Polat, K.\ (2024)
+Blood glucose level estimation using photoplethysmography (PPG) signals with explainable artificial intelligence techniques.
+{\it Open Journal of Nano} {\bf 9}(1):45--62.
+
+[11] Hammour, G.\ \& Mandic, D.P.\ (2023)
+An in-ear PPG-based blood glucose monitor: A proof-of-concept study.
+{\it Sensors} {\bf 23}(6):3319.
+
+[12] Hossain, S., Debnath, B., Biswas, S., et al.\ (2019)
+Estimation of blood glucose from PPG signal using convolutional neural network.
+In {\it 2019 IEEE International Conference on Biomedical Engineering, Computer and Information Technology for Health (BECITHCON)}, pp.\ 53--58.
+
+[13] Maleki, F., Ovens, K., Gupta, R., et al.\ (2022)
+Generalizability of machine learning models: Quantitative evaluation of three methodological pitfalls.
+{\it Radiology: Artificial Intelligence} {\bf 5}(1):e220028.
+
+[14] Shalizi, C.\ (2013)
+Advanced data analysis from an elementary point of view.
+
+[15] Heinemann, L., Schoemaker, M., Schmelzeisen-Redecker, G., et al.\ (2020)
+Benefits and limitations of MARD as a performance parameter for continuous glucose monitoring in the interstitial space.
+{\it Journal of Diabetes Science and Technology} {\bf 14}(1):135--150.
+
+
+[16] Lee, H.C., Park, Y., Yoon, S.B., et al.\ (2022)
+VitalDB, a high-fidelity multi-parameter vital signs database in surgical patients.
+{\it Scientific Data} {\bf 9}(1):279.
+
+[17] Kermani, A.\ \& Esmaeili, H.\ (2023)
+The dataset of photoplethysmography signals collected from a pulse sensor to measure blood glucose level.
+{\it Mendeley Data} {\bf 3}:10.17632.
+
+[18] Ali, M., Li, J., Fan, B.\ \& Nie, Z.\ (2025)
+PPG based noninvasive blood glucose monitoring using multi-view attention and cascaded BiLSTM hierarchical feature fusion approach.
+{\it IEEE Journal of Biomedical and Health Informatics} {\bf 29}(7):4692--4702.
+
+% \newpage
+% \input{checklist}
+
+\end{document}

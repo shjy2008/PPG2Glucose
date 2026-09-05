@@ -35,13 +35,13 @@ def extract_basic_info(row: pd.Series, feature_keys=()) -> dict:
     valid = True
     subject_ref = _subject_ref(row)
 
-    age = safe_float(_first_present(row, ['Age(year)', 'Age']))
+    age = safe_float(_first_present(row, ['Age(year)', 'Age (year)', 'Age']))
     if 'age' in feature_keys and np.isnan(age):
         print("Invalid age value, subject_ID:", subject_ref)
         valid = False
 
-    height = safe_float(_first_present(row, ['Height(cm)', 'Height']))
-    weight = safe_float(_first_present(row, ['Weight(kg)', 'Weight']))
+    height = safe_float(_first_present(row, ['Height(cm)', 'Height (cm)', 'Height']))
+    weight = safe_float(_first_present(row, ['Weight(kg)', 'Weight (kg)', 'Weight']))
     if (
         ('bmi' in feature_keys or 'height' in feature_keys or 'weight' in feature_keys)
         and (np.isnan(height) or np.isnan(weight))

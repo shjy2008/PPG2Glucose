@@ -16,6 +16,7 @@ DATASET_ROOTS = {
     'IPS': Path('dataset/IPS'),
     'MUST': Path('dataset/MUST'),
     'vitaldb': _VITALDB_16MIN_ROOT,
+    'Hb_PPG': Path('dataset/Hb_PPG_Dataset'),
 }
 
 # Config profile used for PPG/demographics when the CLI name is an alias/path.
@@ -23,6 +24,8 @@ DATASET_CONFIG_PROFILE = {
     'IPS': 'IPS',
     'MUST': 'MUST',
     'vitaldb': 'vitaldb',
+    'Hb_PPG': 'Hb_PPG',
+    'Hb_PPG_Dataset': 'Hb_PPG',
 }
 
 # Default --ppg-seconds when --dataset vitaldb and flag omitted. Other datasets: full signal.
@@ -37,6 +40,8 @@ BASIC_FEATURE_KEYS = {
     # (depth=3 was MAE 0.7109 / R2 -0.0140; age-only baseline MAE 0.7119 / R2 -0.0182)
     'MUST': ('age', 'weight'),
     'vitaldb': ('age', 'height', 'weight', 'bmi'),
+    # Height/weight missing for 77/217 glucose-labeled subjects (marked "/").
+    'Hb_PPG': ('age', 'height', 'weight', 'bmi'),
 }
 DEFAULT_BASIC_FEATURE_KEYS = ()
 
@@ -48,6 +53,7 @@ PPG_SAMPLING_RATE = {
     'MUST': 2175,
     'IPS': 200,
     'vitaldb': 500,
+    'Hb_PPG': 200,
 }
 DEFAULT_PPG_SAMPLING_RATE = 200
 
@@ -58,6 +64,7 @@ PPG_TARGET_FS = {
     'MUST': None,  # 100.0
     'IPS': None,
     'vitaldb': None,
+    'Hb_PPG': None,
 }
 DEFAULT_PPG_TARGET_FS = None
 
@@ -77,6 +84,7 @@ PPG_FEATURE_GROUPS = {
         ),
     'IPS': DEFAULT_PPG_FEATURE_GROUPS,
     'vitaldb': DEFAULT_PPG_FEATURE_GROUPS,
+    'Hb_PPG': DEFAULT_PPG_FEATURE_GROUPS,
 }
 
 # 0 = full signal (one sample). >0 = non-overlapping windows in seconds.
@@ -87,6 +95,7 @@ PPG_TRIM_FRACTIONS = {
     'MUST': (0.0, 0.0),
     'IPS': (0.1, 0.0),
     'vitaldb': (0.0, 0.0),
+    'Hb_PPG': (0.0, 0.0),
 }
 DEFAULT_PPG_TRIM_FRACTIONS = (0.0, 0.0)
 
@@ -101,6 +110,7 @@ PPG_FILTER = {
     'MUST': 'none',
     'IPS': 'none',
     'vitaldb': 'none',
+    'Hb_PPG': 'none',
 }
 DEFAULT_PPG_FILTER = 'none'
 
@@ -111,6 +121,7 @@ PPG_BEST_SEGMENT_SECONDS = {
     'MUST': None,  # 4.0
     'IPS': None,
     'vitaldb': None,
+    'Hb_PPG': None,
 }
 DEFAULT_PPG_BEST_SEGMENT_SECONDS = None
 PPG_BEST_SEGMENT_HOP_SECONDS = 1.0
@@ -122,7 +133,15 @@ PPG_SQA_THRESHOLD = {
     'MUST': None, # 0.3
     'IPS': None,
     'vitaldb': None,
+    'Hb_PPG': None,
 }
+
+# Named column for multi-wavelength CSVs. None = first column (MUST / vitaldb).
+# Hb-PPG 940 nm is the IR channel closest to typical fingertip glucose PPG.
+PPG_CSV_COLUMN = {
+    'Hb_PPG': '940nm',
+}
+DEFAULT_PPG_CSV_COLUMN = None
 DEFAULT_PPG_SQA_THRESHOLD = None
 PPG_SQA_WINDOW_SECONDS = 6.0
 
@@ -152,6 +171,8 @@ def resolve_config_dataset(dataset: str | Path | None) -> str:
         return 'MUST'
     if lower_name.startswith('ips') or '/ips' in lower_path:
         return 'IPS'
+    if 'hb_ppg' in lower_name or 'hb-ppg' in lower_path or 'hb_ppg' in lower_path:
+        return 'Hb_PPG'
 
     root = Path(raw)
     if not root.is_absolute():
@@ -163,6 +184,8 @@ def resolve_config_dataset(dataset: str | Path | None) -> str:
             return 'MUST'
         if (root / 'bg_re.xlsx').is_file():
             return 'IPS'
+        if (root / 'subject information.xlsx').is_file() and (root / 'data_csv').is_dir():
+            return 'Hb_PPG'
     return raw
 
 
@@ -198,6 +221,10 @@ def ppg_best_segment_seconds(dataset: str):
 
 def ppg_sqa_threshold(dataset: str):
     return PPG_SQA_THRESHOLD.get(resolve_config_dataset(dataset), DEFAULT_PPG_SQA_THRESHOLD)
+
+
+def ppg_csv_column(dataset: str):
+    return PPG_CSV_COLUMN.get(resolve_config_dataset(dataset), DEFAULT_PPG_CSV_COLUMN)
 
 
 def resolve_ppg_center_window_seconds(ppg_seconds: float | None = None) -> float | None:

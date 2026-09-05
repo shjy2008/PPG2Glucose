@@ -285,9 +285,10 @@ def read_signal_waveform(
     filter_name: str = DEFAULT_PPG_FILTER,
     target_fs: float | None = DEFAULT_PPG_TARGET_FS,
     center_window_seconds: float | None = None,
+    csv_column: str | None = None,
 ) -> np.ndarray:
     """Return PPG samples (trim → filter at native fs → optional downsample → center crop)."""
-    signal = _read_signal_values(signal_path)
+    signal = _read_signal_values(signal_path, csv_column=csv_column)
     signal = trim_signal(signal, *trim_fractions)
     signal = apply_ppg_filter(signal, fs=fs, filter_name=filter_name)
     signal = downsample_signal(signal, source_fs=fs, target_fs=target_fs)
@@ -298,10 +299,43 @@ def read_signal_waveform(
     )
 
 
-def _read_signal_values(signal_path: Path) -> np.ndarray:
+def _csv_has_header(columns) -> bool:
+    try:
+        float(str(columns[0]).strip())
+    except (TypeError, ValueError):
+        return True
+    return False
+
+
+def _select_csv_series(frame: pd.DataFrame, csv_column: str | None) -> pd.Series:
+    if csv_column is None:
+        return frame.iloc[:, 0]
+    if csv_column in frame.columns:
+        return frame[csv_column]
+    want = str(csv_column).lower().replace(' ', '')
+    for name in frame.columns:
+        if str(name).lower().replace(' ', '') == want:
+            return frame[name]
+    raise ValueError(
+        f'PPG CSV column {csv_column!r} not in {list(frame.columns)}'
+    )
+
+
+def _read_signal_values(signal_path: Path, csv_column: str | None = None) -> np.ndarray:
     if signal_path.suffix.lower() == '.csv':
-        values = pd.read_csv(signal_path, header=None).iloc[:, 0]
-        return values.to_numpy(dtype=float)
+        header = pd.read_csv(signal_path, nrows=0)
+        if _csv_has_header(header.columns):
+            usecols = None if csv_column is None else [csv_column]
+            try:
+                frame = pd.read_csv(signal_path, usecols=usecols)
+            except ValueError:
+                frame = pd.read_csv(signal_path)
+            values = _select_csv_series(frame, csv_column)
+        else:
+            frame = pd.read_csv(signal_path, header=None)
+            values = frame.iloc[:, 0]
+        arr = pd.to_numeric(values, errors='coerce').to_numpy(dtype=float)
+        return arr[np.isfinite(arr)]
     with open(signal_path, 'r') as f:
         return np.asarray([float(x) for x in f.read().split()], dtype=float)
 
@@ -671,6 +705,7 @@ def extract_raw_ppg(
     sqa_threshold: float | None = None,
     sqa_window_seconds: float = PPG_SQA_WINDOW_SECONDS,
     center_window_seconds: float | None = None,
+    csv_column: str | None = None,
 ) -> dict | None:
     signal = read_signal_waveform(
         Path(signal_path),
@@ -679,6 +714,7 @@ def extract_raw_ppg(
         filter_name=filter_name,
         target_fs=target_fs,
         center_window_seconds=center_window_seconds,
+        csv_column=csv_column,
     )
     fs_eff = effective_sampling_rate(fs, target_fs)
     signal = select_best_segment(signal, fs=fs_eff, window_seconds=best_segment_seconds)
@@ -721,6 +757,7 @@ def extract_raw_ppg_windows(
     feature_groups: tuple[str, ...] = DEFAULT_PPG_FEATURE_GROUPS,
     sqa_threshold: float | None = None,
     center_window_seconds: float | None = None,
+    csv_column: str | None = None,
 ) -> list[dict]:
     signal = read_signal_waveform(
         Path(signal_path),
@@ -729,6 +766,7 @@ def extract_raw_ppg_windows(
         filter_name=filter_name,
         target_fs=target_fs,
         center_window_seconds=center_window_seconds,
+        csv_column=csv_column,
     )
     fs_eff = effective_sampling_rate(fs, target_fs)
     signal = select_best_segment(signal, fs=fs_eff, window_seconds=best_segment_seconds)
