@@ -158,13 +158,14 @@ def _waveform_cache_fingerprint(
     identity: dict,
     window_seconds: float = 0.0,
 ) -> dict:
+    del include_basic  # Demographics are joined at load; they are not part of the row set.
     return {
         'kind': 'waveform',
         'dataset': dataset_name,
         'signal_length': int(signal_length),
         'window_seconds': float(window_seconds or 0.0),
-        'include_basic': bool(include_basic),
-        'basic_feature_keys': list(basic_feature_keys(dataset_name)) if include_basic else [],
+        'include_basic': False,
+        'basic_feature_keys': [],
         'resample': bool(resample),
         'max_samples': max_samples,
         'ppg_center_window_seconds': center_window_seconds,
@@ -512,6 +513,58 @@ def _attach_IPS_basic(df: pd.DataFrame, root: Path) -> pd.DataFrame:
     id_cols = [c for c in ('subject_ID', 'window_ID', 'target') if c in merged.columns]
     ppg_cols = [c for c in out.columns if c not in id_cols]
     return merged.loc[:, id_cols + list(keys) + ppg_cols].reset_index(drop=True)
+
+
+def _join_waveform_demographics(
+    signals: np.ndarray,
+    targets: np.ndarray,
+    groups: np.ndarray,
+    sessions: np.ndarray,
+    *,
+    dataset_name: str,
+    root: Path,
+    layout: str,
+    include_basic: bool,
+    labels_dir: Path | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Attach BASIC_FEATURE_KEYS after cache load (same join as tabular PPG features)."""
+    n = len(targets)
+    empty = np.empty((n, 0), dtype=np.float32)
+    if not include_basic:
+        return signals, empty, targets, groups, sessions
+
+    keys = list(basic_feature_keys(dataset_name))
+    if not keys:
+        return signals, empty, targets, groups, sessions
+
+    frame = pd.DataFrame(
+        {
+            '_row': np.arange(n),
+            'subject_ID': np.asarray(groups),
+            'session_ID': np.asarray(sessions).astype(str),
+            'target': np.asarray(targets),
+        }
+    )
+    frame['subject_ID'] = pd.to_numeric(frame['subject_ID'], errors='coerce')
+    if layout == 'Hb_PPG':
+        attached = _attach_Hb_PPG_basic(frame, root)
+    elif layout == 'IPS':
+        attached = _attach_IPS_basic(frame, root)
+    else:
+        attach_labels = Path(labels_dir) if labels_dir is not None else root / 'Labels'
+        attached = _attach_labels_rawdata_basic(frame, attach_labels, dataset_name)
+
+    idx = attached['_row'].to_numpy(dtype=int)
+    order = np.argsort(idx)
+    idx = idx[order]
+    demographics = attached.loc[:, keys].to_numpy(dtype=np.float32)[order]
+    return (
+        np.asarray(signals)[idx],
+        demographics,
+        np.asarray(targets)[idx],
+        np.asarray(groups)[idx],
+        np.asarray(sessions)[idx],
+    )
 
 
 def _ppg_feature_dicts(
@@ -1113,7 +1166,9 @@ def load_waveform_dataset(
     Returns:
         signals: (n_samples, signal_length) or (n_samples, n_channels, signal_length)
             when ``PPG_CSV_COLUMN`` lists multiple wavelengths
-        demographics: (n_samples, 4) or (n_samples, 0) when include_basic is False
+        demographics: (n_samples, n_basic) or (n_samples, 0) when include_basic is False.
+            Demographics are joined after the waveform cache load, so changing
+            BASIC_FEATURE_KEYS does not require rebuilding waveforms.
         targets: (n_samples,)
         groups: subject IDs, returned only when return_groups is True
         sessions: recording IDs, returned only when return_sessions is True
@@ -1129,12 +1184,18 @@ def load_waveform_dataset(
         out_length = int(signal_length)
         load_length = int(signal_length)
 
-    def _cached_or_build(config_name: str, root: Path, layout: str, build):
+    def _cached_or_build(
+        config_name: str,
+        root: Path,
+        layout: str,
+        build,
+        attach_labels_dir: Path | None = None,
+    ):
         center, identity = _waveform_center_and_identity(root, layout, ppg_seconds)
         fingerprint = _waveform_cache_fingerprint(
             config_name,
             signal_length=out_length,
-            include_basic=include_basic,
+            include_basic=False,
             resample=resample,
             max_samples=max_samples,
             center_window_seconds=center,
@@ -1149,27 +1210,39 @@ def load_waveform_dataset(
             dataset_name=config_name,
         )
         if cached is not None:
-            return cached
-        loaded = build(center)
-        if window_seconds > 0:
-            n_labs = len(loaded[2])
-            loaded = expand_waveform_windows(
-                loaded[0],
-                loaded[1],
-                loaded[2],
-                loaded[3],
-                dataset=config_name,
-                window_seconds=window_seconds,
-                signal_length=out_length,
-                resample=resample,
-                sessions=loaded[4],
-            )
-            print(
-                f'Windowed {n_labs} lab draws → {len(loaded[2])} segments '
-                f'({window_seconds:g} s, shared glucose labels)'
-            )
-        _save_waveform_cache(cache_path, *loaded, fingerprint)
-        return loaded
+            loaded = cached
+        else:
+            loaded = build(center)
+            if window_seconds > 0:
+                n_labs = len(loaded[2])
+                loaded = expand_waveform_windows(
+                    loaded[0],
+                    loaded[1],
+                    loaded[2],
+                    loaded[3],
+                    dataset=config_name,
+                    window_seconds=window_seconds,
+                    signal_length=out_length,
+                    resample=resample,
+                    sessions=loaded[4],
+                )
+                print(
+                    f'Windowed {n_labs} lab draws → {len(loaded[2])} segments '
+                    f'({window_seconds:g} s, shared glucose labels)'
+                )
+            _save_waveform_cache(cache_path, *loaded, fingerprint)
+        signals, _ignored_demo, targets, groups, sessions = loaded
+        return _join_waveform_demographics(
+            signals,
+            targets,
+            groups,
+            sessions,
+            dataset_name=config_name,
+            root=root,
+            layout=layout,
+            include_basic=include_basic,
+            labels_dir=attach_labels_dir,
+        )
 
     if labels_dir is not None or raw_data_dir is not None:
         if labels_dir is None or raw_data_dir is None:
@@ -1186,11 +1259,12 @@ def load_waveform_dataset(
                 raw_data_dir,
                 config_name,
                 signal_length=load_length,
-                include_basic=include_basic,
+                include_basic=False,
                 resample=resample,
                 max_samples=max_samples,
                 center_window_seconds=center,
             ),
+            attach_labels_dir=Path(labels_dir),
         )
     else:
         root = resolve_dataset_root(dataset)
@@ -1206,11 +1280,12 @@ def load_waveform_dataset(
                     root / 'RawData',
                     config_name,
                     signal_length=load_length,
-                    include_basic=include_basic,
+                    include_basic=False,
                     resample=resample,
                     max_samples=max_samples,
                     center_window_seconds=center,
                 ),
+                attach_labels_dir=root / 'Labels',
             )
         elif layout == 'Hb_PPG':
             print(f'Hb_PPG wavelengths: {ppg_csv_column("Hb_PPG")}')
@@ -1221,7 +1296,7 @@ def load_waveform_dataset(
                 lambda center: _load_Hb_PPG_waveform_dataset(
                     root,
                     signal_length=load_length,
-                    include_basic=include_basic,
+                    include_basic=False,
                     resample=resample,
                     max_samples=max_samples,
                     ppg_seconds=ppg_seconds,
@@ -1236,7 +1311,7 @@ def load_waveform_dataset(
                 lambda center: _load_IPS_waveform_dataset(
                     root,
                     signal_length=load_length,
-                    include_basic=include_basic,
+                    include_basic=False,
                     resample=resample,
                     ppg_seconds=ppg_seconds,
                     center_window_seconds=center,
