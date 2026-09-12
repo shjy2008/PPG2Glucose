@@ -105,6 +105,11 @@ def build_parser():
         action='store_true',
         help='Re-extract PPG features and overwrite the feature cache',
     )
+    p.add_argument(
+        '--only-basic',
+        action='store_true',
+        help='Drop PPG features; train on BASIC_FEATURE_KEYS only (demographics baseline)',
+    )
     return p
 
 
@@ -137,6 +142,7 @@ def main():
     )
     from config import (
         DEFAULT_VITALDB_PPG_SECONDS,
+        basic_feature_keys,
         ppg_best_segment_seconds,
         ppg_csv_column,
         ppg_feature_groups,
@@ -208,6 +214,20 @@ def main():
                 f"Sample-wise CV (KFold over rows; subject leakage allowed): "
                 f"{len(y)} samples"
             )
+    if args.only_basic:
+        keys = [k for k in basic_feature_keys(args.dataset) if k in X.columns]
+        missing = [k for k in basic_feature_keys(args.dataset) if k not in X.columns]
+        if missing:
+            print(f'--only-basic: dropping missing demographic keys {missing}')
+        if not keys:
+            raise SystemExit(
+                '--only-basic requires demographic columns from BASIC_FEATURE_KEYS; '
+                f'none found in X ({list(X.columns)[:12]}…)'
+            )
+        X = X[keys]
+        feature_names = keys
+        print(f'PPG dropped; demographics only: {keys}')
+
     print(
         f"Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}, "
         f"features: {X.shape[1]}"

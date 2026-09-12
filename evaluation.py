@@ -515,15 +515,34 @@ def print_comparison_table(summary_df: pd.DataFrame) -> None:
 
 
 def print_cv_metric_block(row: pd.Series) -> None:
-    print(f"  MAE:      {format_metric_summary(row['mae_mean'], row['mae_std'])} mmol/L")
-    print(f"  RMSE:     {format_metric_summary(row['rmse_mean'], row['rmse_std'])} mmol/L")
-    print(f"  R2:       {format_metric_summary(row['r2_mean'], row['r2_std'])}")
-    print(f"  ACC:      {format_metric_summary(row['acc_mean'], row['acc_std'], decimals=2)}%")
-    print(f"  Zone A:   {format_metric_summary(row['zone_a_mean'], row['zone_a_std'], decimals=2)}%")
-    print(f"  Zone B:   {format_metric_summary(row['zone_b_mean'], row['zone_b_std'], decimals=2)}%")
-    print(f"  Zone A+B: {format_metric_summary(row['zone_ab_mean'], row['zone_ab_std'], decimals=2)}%")
-    print(f"  MARD:     {format_metric_summary(row['mard_mean'], row['mard_std'], decimals=2)}%")
-    print(f"  Pearson:  {format_pearson_summary(row['pearson_oof_r'], row['pearson_oof_p'])}")
+    mae = format_metric_summary(row['mae_mean'], row['mae_std'])
+    rmse = format_metric_summary(row['rmse_mean'], row['rmse_std'])
+    r2 = format_metric_summary(row['r2_mean'], row['r2_std'])
+    acc = format_metric_summary(row['acc_mean'], row['acc_std'], decimals=2)
+    zone_a = format_metric_summary(row['zone_a_mean'], row['zone_a_std'], decimals=2)
+    zone_b = format_metric_summary(row['zone_b_mean'], row['zone_b_std'], decimals=2)
+    zone_ab = format_metric_summary(row['zone_ab_mean'], row['zone_ab_std'], decimals=2)
+    mard = format_metric_summary(row['mard_mean'], row['mard_std'], decimals=2)
+    pearson = format_pearson_summary(row['pearson_oof_r'], row['pearson_oof_p'])
+    print(f"  MAE:      {mae} mmol/L")
+    print(f"  RMSE:     {rmse} mmol/L")
+    print(f"  R2:       {r2}")
+    print(f"  ACC:      {acc}%")
+    print(f"  Zone A:   {zone_a}%")
+    print(f"  Zone B:   {zone_b}%")
+    print(f"  Zone A+B: {zone_ab}%")
+    print(f"  MARD:     {mard}%")
+    print(f"  Pearson:  {pearson}")
+    excel_row = pd.DataFrame([[
+        mae, rmse, r2, acc, zone_a, zone_b, zone_ab, f'{mard}%', pearson,
+    ]])
+    tsv = excel_row.to_csv(index=False, header=False, sep='\t').rstrip('\n')
+    try:
+        excel_row.to_clipboard(index=False, header=False, excel=True)
+        print(tsv)
+        print('(Excel TSV copied to clipboard; paste with Cmd+V)')
+    except Exception:
+        print(tsv)
 
 
 def print_cv_results(
