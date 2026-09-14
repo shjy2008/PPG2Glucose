@@ -9,6 +9,7 @@ import data_loader
 import utils
 import numpy as np
 from config import DEFAULT_SEEDS, DEFAULT_WINDOW_SECONDS, catboost_kwargs
+from data_loader import add_prediction_label_argument, retarget_tabular_frame
 
 DEFAULT_PARAMS = {
     # 'iterations': 400,
@@ -110,6 +111,7 @@ def build_parser():
         action='store_true',
         help='Drop PPG features; train on BASIC_FEATURE_KEYS only (demographics baseline)',
     )
+    add_prediction_label_argument(p, keep_flag='--only-basic')
     return p
 
 
@@ -171,6 +173,7 @@ def main():
         refresh_cache=args.refresh_cache,
         ppg_seconds=ppg_seconds,
     )
+    ds, label, y_unit, plot_clarke = retarget_tabular_frame(ds, args.label)
     # Leakage if the same subject appears in train and val with multiple rows
     # (MUST/vitaldb sessions, or windowed PPG).
     multi_sample_subjects = (
@@ -214,6 +217,10 @@ def main():
                 f"Sample-wise CV (KFold over rows; subject leakage allowed): "
                 f"{len(y)} samples"
             )
+    if label != 'glucose' and label in X.columns:
+        X = X.drop(columns=[label])
+        feature_names = [name for name in feature_names if name != label]
+        print(f'Dropped {label} from X (would leak the prediction target)')
     if args.only_basic:
         keys = [k for k in basic_feature_keys(args.dataset) if k in X.columns]
         missing = [k for k in basic_feature_keys(args.dataset) if k not in X.columns]
@@ -227,6 +234,12 @@ def main():
         X = X[keys]
         feature_names = keys
         print(f'PPG dropped; demographics only: {keys}')
+    elif label != 'glucose':
+        demo_keys = [k for k in basic_feature_keys(args.dataset) if k in X.columns]
+        if demo_keys:
+            X = X.drop(columns=demo_keys)
+            feature_names = [name for name in feature_names if name not in demo_keys]
+            print(f'PPG-only {label}: dropped demographics {demo_keys}')
 
     print(
         f"Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}, "
@@ -248,7 +261,7 @@ def main():
         all_preds.append(train_and_predict(seed))
     training_pred = np.mean(np.column_stack(all_preds), axis=1)
     mae = np.mean(np.abs(training_pred - y))
-    print(f"Training MAE: {mae:.4f} mmol/L")
+    print(f"Training MAE: {mae:.4f} {y_unit}")
 
     summary_df, fi = utils.run_repeated_kfold_training(
         X,
@@ -260,6 +273,8 @@ def main():
         select_top_n=args.select_top,
         groups=groups,
         sessions=sessions,
+        y_unit=y_unit,
+        plot_clarke=plot_clarke,
     )
     n_evaluations = int(summary_df['n_evaluations'].iloc[0])
     if args.select_top is not None:

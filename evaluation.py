@@ -52,14 +52,14 @@ def target_stats(y: np.ndarray) -> dict:
     }
 
 
-def print_target_stats(y: np.ndarray) -> None:
+def print_target_stats(y: np.ndarray, y_unit: str = 'mmol/L') -> None:
     stats = target_stats(y)
-    print('\n---Target distribution (mmol/L)---')
+    print(f'\n---Target distribution ({y_unit})---')
     print(f"n:        {stats['n']}")
     print(f"mean:     {stats['mean']:.4f}")
-    print(f"variance: {stats['variance']:.4f} (mmol/L)²")
+    print(f"variance: {stats['variance']:.4f} ({y_unit})²")
     print(f"std:      {stats['std']:.4f}")
-    print(f"(Mean predictor baseline RMSE ≈ {stats['std']:.4f} mmol/L)")
+    print(f"(Mean predictor baseline RMSE ≈ {stats['std']:.4f} {y_unit})")
     print('----------------------------------\n')
 
 
@@ -465,8 +465,9 @@ def print_cv_intro(
     per_model: bool = False,
     models: Optional[Sequence[str]] = None,
     extra_lines: Sequence[str] = (),
+    y_unit: str = 'mmol/L',
 ) -> None:
-    print_target_stats(y)
+    print_target_stats(y, y_unit=y_unit)
     total_runs = len(seeds) * n_splits
     scope = ' per model' if per_model else ''
     print(f'\nRepeated CV: {n_splits}-fold × {len(seeds)} seeds = {total_runs} evaluations{scope}')
@@ -484,6 +485,8 @@ def report_cv(
     *,
     plot_model: Optional[str] = None,
     verbose: bool = True,
+    y_unit: str = 'mmol/L',
+    plot_clarke: bool = True,
 ) -> tuple[Dict[str, list[dict]], pd.DataFrame, Optional[np.ndarray]]:
     summary_df = cv_summary_df(fold_metrics_by_model, y, oof_by_model)
     oof_predictions = oof_by_model[plot_model] if plot_model else None
@@ -492,6 +495,8 @@ def report_cv(
             summary_df,
             y if oof_predictions is not None else None,
             oof_predictions,
+            y_unit=y_unit,
+            plot_clarke=plot_clarke,
         )
     return fold_metrics_by_model, summary_df, oof_predictions
 
@@ -514,25 +519,31 @@ def print_comparison_table(summary_df: pd.DataFrame) -> None:
     print(pd.DataFrame(rows).to_string(index=False))
 
 
-def print_cv_metric_block(row: pd.Series) -> None:
+def print_cv_metric_block(
+    row: pd.Series,
+    y_unit: str = 'mmol/L',
+    clinical: bool = True,
+) -> None:
     mae = format_metric_summary(row['mae_mean'], row['mae_std'])
     rmse = format_metric_summary(row['rmse_mean'], row['rmse_std'])
     r2 = format_metric_summary(row['r2_mean'], row['r2_std'])
+    pearson = format_pearson_summary(row['pearson_oof_r'], row['pearson_oof_p'])
+    print(f"  MAE:      {mae} {y_unit}")
+    print(f"  RMSE:     {rmse} {y_unit}")
+    print(f"  R2:       {r2}")
+    print(f"  Pearson:  {pearson}")
+    if not clinical:
+        return
     acc = format_metric_summary(row['acc_mean'], row['acc_std'], decimals=2)
     zone_a = format_metric_summary(row['zone_a_mean'], row['zone_a_std'], decimals=2)
     zone_b = format_metric_summary(row['zone_b_mean'], row['zone_b_std'], decimals=2)
     zone_ab = format_metric_summary(row['zone_ab_mean'], row['zone_ab_std'], decimals=2)
     mard = format_metric_summary(row['mard_mean'], row['mard_std'], decimals=2)
-    pearson = format_pearson_summary(row['pearson_oof_r'], row['pearson_oof_p'])
-    print(f"  MAE:      {mae} mmol/L")
-    print(f"  RMSE:     {rmse} mmol/L")
-    print(f"  R2:       {r2}")
     print(f"  ACC:      {acc}%")
     print(f"  Zone A:   {zone_a}%")
     print(f"  Zone B:   {zone_b}%")
     print(f"  Zone A+B: {zone_ab}%")
     print(f"  MARD:     {mard}%")
-    print(f"  Pearson:  {pearson}")
     excel_row = pd.DataFrame([[
         mae, rmse, r2, acc, zone_a, zone_b, zone_ab, f'{mard}%', pearson,
     ]])
@@ -550,6 +561,8 @@ def print_cv_results(
     y_true: Optional[np.ndarray] = None,
     y_pred: Optional[np.ndarray] = None,
     preview_n: int = 10,
+    y_unit: str = 'mmol/L',
+    plot_clarke: bool = True,
 ) -> None:
     n_evaluations = int(summary_df['n_evaluations'].iloc[0])
     label = 'per model' if len(summary_df) > 1 else ''
@@ -558,16 +571,17 @@ def print_cv_results(
     for _, row in summary_df.iterrows():
         if len(summary_df) > 1:
             print(f"\n{row['model']}")
-        print_cv_metric_block(row)
+        print_cv_metric_block(row, y_unit=y_unit, clinical=plot_clarke)
 
     if y_true is None or y_pred is None:
         return
 
     y_true, y_pred = finite_pairs(y_true, y_pred)
-    print_clarke_plot(y_true, y_pred)
+    if plot_clarke:
+        print_clarke_plot(y_true, y_pred)
     preview = pd.DataFrame({
-        'actual (mmol/L)': np.asarray(y_true).reshape(-1),
-        'predicted (mmol/L)': np.asarray(y_pred).reshape(-1),
+        f'actual ({y_unit})': np.asarray(y_true).reshape(-1),
+        f'predicted ({y_unit})': np.asarray(y_pred).reshape(-1),
     })
     print('\nPredictions preview:')
     print(preview.head(preview_n).to_string(index=False))

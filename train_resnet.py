@@ -15,6 +15,7 @@ from config import (
     torch_device,
 )
 from TinyML_code.resnet import resnet34
+from data_loader import add_prediction_label_argument, needs_demographics, retarget_waveform_arrays
 from waveform_train import (
     make_signal_loader,
     normalize_signals_per_sample,
@@ -77,6 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
         help='Concatenate overlapping demographics (default: PPG only)',
     )
     parser.add_argument('--no-basic', dest='include_basic', action='store_false')
+    add_prediction_label_argument(parser)
     parser.add_argument(
         '--quick',
         action='store_true',
@@ -348,7 +350,7 @@ def main() -> None:
     signals, demographics, targets, groups, sessions = data_loader.load_waveform_dataset(
         dataset=args.dataset,
         signal_length=args.signal_length,
-        include_basic=args.include_basic,
+        include_basic=needs_demographics(args.include_basic, args.label),
         resample=True,
         max_samples=args.max_samples,
         return_groups=True,
@@ -356,12 +358,31 @@ def main() -> None:
         ppg_seconds=ppg_seconds,
         window_seconds=window_seconds,
     )
+    (
+        signals,
+        demographics,
+        targets,
+        groups,
+        sessions,
+        label,
+        y_unit,
+        plot_clarke,
+    ) = retarget_waveform_arrays(
+        signals,
+        demographics,
+        targets,
+        groups,
+        sessions,
+        dataset=args.dataset,
+        label=args.label,
+        keep_demo=args.include_basic,
+    )
     signals = normalize_signals_per_sample(signals)
     basic_mode = 'with basic info' if args.include_basic and demographics.size else 'PPG only'
     print(
         f'Training ResNet-34 on {device.type}: {len(targets)} samples, '
         f'signal length {waveform_length(signals)}, '
-        f'{waveform_n_channels(signals)} channel(s) ({basic_mode})'
+        f'{waveform_n_channels(signals)} channel(s) ({basic_mode}, label={label})'
     )
 
     mode = utils.exclusive_split_mode(sample_wise=args.sample_wise, pas=args.pas)
@@ -406,6 +427,8 @@ def main() -> None:
         seeds=seeds,
         groups=cv_groups,
         sessions=cv_sessions,
+        y_unit=y_unit,
+        plot_clarke=plot_clarke,
     )
 
 

@@ -27,7 +27,12 @@ from config import (
     tensor_to_numpy,
     torch_device,
 )
-from data_loader import resolve_dataset_root
+from data_loader import (
+    add_prediction_label_argument,
+    needs_demographics,
+    resolve_dataset_root,
+    retarget_waveform_arrays,
+)
 from waveform_train import (
     make_signal_loader,
     normalize_signals_per_sample,
@@ -72,6 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
         action='store_true',
         help='Use BASIC_FEATURE_KEYS from config (default: PPG only)',
     )
+    add_prediction_label_argument(p)
     return p
 
 
@@ -217,13 +223,32 @@ def main() -> None:
     signals, demographics, targets, groups, sessions = data_loader.load_waveform_dataset(
         dataset=args.dataset,
         signal_length=args.signal_length,
-        include_basic=args.include_basic,
+        include_basic=needs_demographics(args.include_basic, args.label),
         resample=True,
         max_samples=args.max_samples,
         return_groups=True,
         return_sessions=True,
         ppg_seconds=ppg_seconds,
         window_seconds=window_seconds,
+    )
+    (
+        signals,
+        demographics,
+        targets,
+        groups,
+        sessions,
+        label,
+        y_unit,
+        plot_clarke,
+    ) = retarget_waveform_arrays(
+        signals,
+        demographics,
+        targets,
+        groups,
+        sessions,
+        dataset=args.dataset,
+        label=args.label,
+        keep_demo=args.include_basic,
     )
 
     signals = normalize_signals_per_sample(signals)
@@ -243,7 +268,7 @@ def main() -> None:
     print(
         f'Training CBHFF on {device.type}: {len(targets)} samples, '
         f'len={waveform_length(signals)}, {waveform_n_channels(signals)} ch, '
-        f'{basic_mode}, {split_desc}'
+        f'{basic_mode}, {split_desc}, label={label}'
     )
 
     def predict_fold(train_index, test_index, seed):
@@ -256,6 +281,7 @@ def main() -> None:
     utils.run_repeated_kfold_array_cv(
         targets, predict_fold, model_name='cbhff',
         n_splits=args.n_splits, seeds=seeds, groups=cv_groups, sessions=cv_sessions,
+        y_unit=y_unit, plot_clarke=plot_clarke,
     )
 
 

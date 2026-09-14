@@ -254,6 +254,7 @@ def _run_repeated_kfold_cv(
     sessions: Optional[np.ndarray] = None,
     verbose: bool = True,
     fold_log: Optional[Callable[[Dict[str, dict]], str]] = None,
+    y_unit: str = 'mmol/L',
 ) -> Tuple[Dict[str, list[dict]], Dict[str, np.ndarray]]:
     y = np.asarray(y, dtype=float).reshape(-1)
     if seeds is None:
@@ -293,8 +294,8 @@ def _run_repeated_kfold_cv(
                     fold_log(metrics_by_model)
                     if fold_log is not None
                     else (
-                        f'RMSE={metrics["rmse"]:.4f} mmol/L '
-                        f'MAE={metrics["mae"]:.4f} mmol/L R2={metrics["r2"]:.4f}'
+                        f'RMSE={metrics["rmse"]:.4f} {y_unit} '
+                        f'MAE={metrics["mae"]:.4f} {y_unit} R2={metrics["r2"]:.4f}'
                     )
                 )
                 print(f'  Fold {fold_index}: {message}')
@@ -319,13 +320,15 @@ def run_repeated_kfold_array_cv(
     sessions: Optional[np.ndarray] = None,
     print_target_distribution: bool = True,
     verbose: bool = True,
+    y_unit: str = 'mmol/L',
+    plot_clarke: bool = True,
 ) -> Tuple[list[dict], pd.DataFrame, np.ndarray]:
     y = np.asarray(y, dtype=float).reshape(-1)
     if seeds is None:
         seeds = DEFAULT_SEEDS
 
     if verbose and print_target_distribution:
-        evaluation.print_cv_intro(y, n_splits, seeds)
+        evaluation.print_cv_intro(y, n_splits, seeds, y_unit=y_unit)
 
     fold_metrics_by_model, oof_by_model = _run_repeated_kfold_cv(
         y,
@@ -338,6 +341,7 @@ def run_repeated_kfold_array_cv(
         groups=groups,
         sessions=sessions,
         verbose=verbose,
+        y_unit=y_unit,
     )
     fold_metrics_by_model, summary_df, oof_predictions = evaluation.report_cv(
         fold_metrics_by_model,
@@ -345,6 +349,8 @@ def run_repeated_kfold_array_cv(
         y,
         plot_model=model_name,
         verbose=verbose,
+        y_unit=y_unit,
+        plot_clarke=plot_clarke,
     )
     return fold_metrics_by_model[model_name], summary_df, oof_predictions
 
@@ -478,6 +484,8 @@ def run_repeated_kfold_training(
     verbose: bool = True,
     train_filter: Optional[Callable[[pd.DataFrame, pd.Series], np.ndarray]] = None,
     return_fold_metrics: bool = False,
+    y_unit: str = 'mmol/L',
+    plot_clarke: bool = True,
 ) -> Union[Tuple[pd.DataFrame, pd.DataFrame], Tuple[pd.DataFrame, pd.DataFrame, list]]:
     """Repeated k-fold CV.
 
@@ -535,7 +543,9 @@ def run_repeated_kfold_training(
             extras.append('Train-fold filter: enabled (validation folds keep all rows)')
         if use_selection:
             extras.append(f'Feature selection: top {select_top_n} per fold (train-only ranking)')
-        evaluation.print_cv_intro(y_values, n_splits, seeds, extra_lines=extras)
+        evaluation.print_cv_intro(
+            y_values, n_splits, seeds, extra_lines=extras, y_unit=y_unit
+        )
 
     def run_fold(train_index: np.ndarray, val_index: np.ndarray, seed: int) -> Dict[str, np.ndarray]:
         nonlocal accum, selection_counts, importance_runs, n_runs
@@ -593,6 +603,7 @@ def run_repeated_kfold_training(
         groups=groups,
         sessions=sessions,
         verbose=verbose,
+        y_unit=y_unit,
     )
     _, summary_df, oof_predictions = evaluation.report_cv(
         fold_metrics_by_model,
@@ -634,7 +645,13 @@ def run_repeated_kfold_training(
                     index=False,
                 )
             )
-        evaluation.print_cv_results(summary_df, y_values, oof_predictions)
+        evaluation.print_cv_results(
+            summary_df,
+            y_values,
+            oof_predictions,
+            y_unit=y_unit,
+            plot_clarke=plot_clarke,
+        )
 
     if return_fold_metrics:
         return summary_df, importance_df, fold_metrics_by_model[model_name]

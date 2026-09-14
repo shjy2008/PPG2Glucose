@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-from pathlib import Path
 from utils import (
     exclude_target_outlier_arrays,
     mg_dl_to_mmol_l,
@@ -42,6 +43,145 @@ FEATURE_CACHE_DIR = Path(__file__).resolve().parent / 'feature_cache'
 WAVEFORM_CACHE_DIR = Path(__file__).resolve().parent / 'waveform_cache'
 
 _DEMOGRAPHIC_COLUMNS = ('sex', 'age', 'height', 'weight', 'bmi')
+LABEL_UNITS = {
+    'glucose': 'mmol/L',
+    'target': 'mmol/L',
+    'age': 'years',
+    'height': 'cm',
+    'weight': 'kg',
+    'bmi': 'kg/m^2',
+}
+_LABEL_MISSING_HINT = (
+    'MUST/VitalDB label CSVs have no blood pressure. '
+    'IPS has a BP string in bg_re.xlsx that is not attached. '
+    'To predict a field that exists in the tables but is missing here, '
+    'add it to BASIC_FEATURE_KEYS in config.py.'
+)
+
+
+def prediction_label_key(label: str) -> str:
+    key = str(label).strip().lower()
+    if key in {'glucose', 'target', ''}:
+        return 'glucose'
+    return key
+
+
+def label_unit(label: str) -> str:
+    key = prediction_label_key(label)
+    return LABEL_UNITS.get(key, key)
+
+
+def needs_demographics(include_basic: bool, label: str) -> bool:
+    """Load BASIC_FEATURE_KEYS when they are inputs or the prediction target."""
+    return bool(include_basic) or prediction_label_key(label) != 'glucose'
+
+
+def add_prediction_label_argument(parser, *, keep_flag: str = '--include-basic') -> None:
+    parser.add_argument(
+        '--label',
+        default='glucose',
+        help=(
+            'Predict glucose (default) or an attached demographic '
+            f'(age, height, weight, bmi). Non-glucose is PPG-only unless {keep_flag}. '
+            'Look at MAE/R²/r; Clarke is glucose-only.'
+        ),
+    )
+
+
+def _label_eval_kwargs(key: str) -> tuple[str, bool]:
+    return label_unit(key), key == 'glucose'
+
+
+def retarget_tabular_frame(
+    ds: pd.DataFrame, label: str
+) -> tuple[pd.DataFrame, str, str, bool]:
+    """Swap y from glucose to another column already attached after load."""
+    key = prediction_label_key(label)
+    y_unit, plot_clarke = _label_eval_kwargs(key)
+    if key == 'glucose':
+        return ds, key, y_unit, plot_clarke
+    if key not in ds.columns:
+        attached = [c for c in _DEMOGRAPHIC_COLUMNS if c in ds.columns]
+        raise SystemExit(
+            f'--label {label!r} is not a column after load. '
+            f'Attached demographics: {attached or "none"}. {_LABEL_MISSING_HINT}'
+        )
+    out = ds.copy()
+    n_before = len(out)
+    out['target'] = pd.to_numeric(out[key], errors='coerce')
+    out = out.loc[out['target'].notna()].reset_index(drop=True)
+    dropped = n_before - len(out)
+    if dropped:
+        print(f'Dropped {dropped} row(s) with missing {key}')
+    if out.empty:
+        raise SystemExit(f'No rows left after retargeting to {key}')
+    print(f'Predicting {key} instead of glucose ({len(out)} rows)')
+    return out, key, y_unit, plot_clarke
+
+
+def retarget_waveform_arrays(
+    signals: np.ndarray,
+    demographics: np.ndarray,
+    targets: np.ndarray,
+    groups: np.ndarray,
+    sessions: np.ndarray,
+    *,
+    dataset: str,
+    label: str,
+    keep_demo: bool,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, str, str, bool]:
+    """Swap waveform y from glucose to a BASIC_FEATURE_KEYS column.
+
+    Load with ``include_basic=True`` (see ``needs_demographics``). The original
+    glucose ``targets`` are discarded when ``label`` is not glucose.
+    """
+    key = prediction_label_key(label)
+    y_unit, plot_clarke = _label_eval_kwargs(key)
+    demo = np.asarray(demographics)
+    keys = list(basic_feature_keys(dataset))
+    if key == 'glucose':
+        return (
+            signals, demo, np.asarray(targets), groups, sessions,
+            key, y_unit, plot_clarke,
+        )
+
+    if demo.ndim != 2 or demo.shape[1] != len(keys) or key not in keys:
+        raise SystemExit(
+            f'--label {label!r} needs that field in BASIC_FEATURE_KEYS and a '
+            f'demographic matrix of shape (n, {len(keys)}). '
+            f'Got keys={keys}, demographics.shape={getattr(demo, "shape", None)}. '
+            f'{_LABEL_MISSING_HINT}'
+        )
+
+    col = keys.index(key)
+    y = demo[:, col].astype(np.float64, copy=False)
+    mask = np.isfinite(y)
+    dropped = int((~mask).sum())
+    if dropped:
+        print(f'Dropped {dropped} row(s) with missing {key}')
+    if not mask.any():
+        raise SystemExit(f'No rows left after retargeting to {key}')
+
+    signals = np.asarray(signals)[mask]
+    groups = np.asarray(groups)[mask]
+    sessions = np.asarray(sessions)[mask]
+    y = y[mask].astype(np.float32, copy=False)
+    demo = demo[mask]
+    if keep_demo:
+        keep_idx = [i for i, name in enumerate(keys) if name != key]
+        demographics = (
+            demo[:, keep_idx].astype(np.float32, copy=False)
+            if keep_idx
+            else np.empty((len(y), 0), dtype=np.float32)
+        )
+        print(
+            f'Predicting {key} instead of glucose ({len(y)} rows); '
+            f'demographics without {key}'
+        )
+    else:
+        demographics = np.empty((len(y), 0), dtype=np.float32)
+        print(f'Predicting {key} instead of glucose ({len(y)} rows); PPG only')
+    return signals, demographics, y, groups, sessions, key, y_unit, plot_clarke
 
 
 def _feature_cache_path(dataset_name: str, fingerprint: dict) -> Path:
