@@ -276,6 +276,44 @@ def finite_pairs(y_true: np.ndarray, y_pred: np.ndarray) -> tuple[np.ndarray, np
     return y_true[mask], y_pred[mask]
 
 
+def aggregate_by_group(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    groups: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Average predictions (and targets) within each group before metrics.
+
+    Used for windowed inference → session-level evaluation: every window is
+    scored, then windows from the same recording are mean-pooled to one value.
+    """
+    y_true = np.asarray(y_true, dtype=float).reshape(-1)
+    y_pred = np.asarray(y_pred, dtype=float).reshape(-1)
+    groups = np.asarray(groups)
+    if len(groups) != len(y_true) or len(y_pred) != len(y_true):
+        raise ValueError('y_true, y_pred, and groups must have the same length')
+    if y_true.size == 0:
+        return y_true, y_pred
+
+    order = np.argsort(groups, kind='mergesort')
+    groups_sorted = groups[order]
+    y_true_sorted = y_true[order]
+    y_pred_sorted = y_pred[order]
+    _, start_idx = np.unique(groups_sorted, return_index=True)
+    starts = list(start_idx) + [len(groups_sorted)]
+
+    agg_true = []
+    agg_pred = []
+    for left, right in zip(starts[:-1], starts[1:]):
+        true_chunk = y_true_sorted[left:right]
+        pred_chunk = y_pred_sorted[left:right]
+        mask = np.isfinite(true_chunk) & np.isfinite(pred_chunk)
+        if not mask.any():
+            continue
+        agg_true.append(float(np.mean(true_chunk[mask])))
+        agg_pred.append(float(np.mean(pred_chunk[mask])))
+    return np.asarray(agg_true, dtype=float), np.asarray(agg_pred, dtype=float)
+
+
 def glucose_prediction_acc(y_true: np.ndarray, y_pred: np.ndarray) -> float:
     """ACC fraction: |error| < 0.83 if y <= 5.55 mmol/L, else relative error <= 15%."""
     y_true = np.asarray(y_true, dtype=float).reshape(-1)
@@ -414,9 +452,14 @@ def cv_summary_row(
     y: np.ndarray,
     oof_predictions: np.ndarray,
     model_name: str,
+    eval_groups: Optional[np.ndarray] = None,
 ) -> dict:
     summary = summarize_repeated_cv_metrics(fold_metrics)
-    oof_metrics = evaluate_regression(y, oof_predictions)
+    if eval_groups is None:
+        oof_metrics = evaluate_regression(y, oof_predictions)
+    else:
+        y_agg, pred_agg = aggregate_by_group(y, oof_predictions, eval_groups)
+        oof_metrics = evaluate_regression(y_agg, pred_agg)
     return {
         'model': model_name,
         'n_evaluations': summary['mae']['n'],
@@ -450,9 +493,16 @@ def cv_summary_df(
     fold_metrics_by_model: Mapping[str, list[dict]],
     y: np.ndarray,
     oof_by_model: Mapping[str, np.ndarray],
+    eval_groups: Optional[np.ndarray] = None,
 ) -> pd.DataFrame:
     return pd.DataFrame([
-        cv_summary_row(fold_metrics_by_model[name], y, oof_by_model[name], name)
+        cv_summary_row(
+            fold_metrics_by_model[name],
+            y,
+            oof_by_model[name],
+            name,
+            eval_groups=eval_groups,
+        )
         for name in fold_metrics_by_model
     ])
 
@@ -487,14 +537,20 @@ def report_cv(
     verbose: bool = True,
     y_unit: str = 'mmol/L',
     plot_clarke: bool = True,
+    eval_groups: Optional[np.ndarray] = None,
 ) -> tuple[Dict[str, list[dict]], pd.DataFrame, Optional[np.ndarray]]:
-    summary_df = cv_summary_df(fold_metrics_by_model, y, oof_by_model)
+    summary_df = cv_summary_df(
+        fold_metrics_by_model, y, oof_by_model, eval_groups=eval_groups
+    )
     oof_predictions = oof_by_model[plot_model] if plot_model else None
     if verbose:
+        y_plot, pred_plot = y, oof_predictions
+        if eval_groups is not None and oof_predictions is not None:
+            y_plot, pred_plot = aggregate_by_group(y, oof_predictions, eval_groups)
         print_cv_results(
             summary_df,
-            y if oof_predictions is not None else None,
-            oof_predictions,
+            y_plot if pred_plot is not None else None,
+            pred_plot,
             y_unit=y_unit,
             plot_clarke=plot_clarke,
         )

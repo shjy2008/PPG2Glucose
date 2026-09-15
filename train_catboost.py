@@ -235,11 +235,22 @@ def main():
         feature_names = keys
         print(f'PPG dropped; demographics only: {keys}')
     elif label != 'glucose':
-        demo_keys = [k for k in basic_feature_keys(args.dataset) if k in X.columns]
+        demo_keys = [k for k in ('sex', 'age', 'height', 'weight', 'bmi') if k in X.columns]
         if demo_keys:
             X = X.drop(columns=demo_keys)
             feature_names = [name for name in feature_names if name not in demo_keys]
             print(f'PPG-only {label}: dropped demographics {demo_keys}')
+    else:
+        # Glucose: keep only BASIC_FEATURE_KEYS demos (extra attach cols are for --label).
+        allowed = set(basic_feature_keys(args.dataset))
+        extra = [
+            k for k in ('sex', 'age', 'height', 'weight', 'bmi')
+            if k in X.columns and k not in allowed
+        ]
+        if extra:
+            X = X.drop(columns=extra)
+            feature_names = [name for name in feature_names if name not in extra]
+            print(f'Glucose inputs: dropped non-BASIC demos {extra}')
 
     print(
         f"Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}, "

@@ -15,6 +15,7 @@ from config import (
     DEFAULT_WINDOW_SECONDS,
     PPG_BEST_SEGMENT_HOP_SECONDS,
     PPG_SQA_WINDOW_SECONDS,
+    attach_demo_keys,
     basic_feature_keys,
     ppg_best_segment_seconds,
     ppg_feature_groups,
@@ -130,26 +131,37 @@ def retarget_waveform_arrays(
     label: str,
     keep_demo: bool,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, str, str, bool]:
-    """Swap waveform y from glucose to a BASIC_FEATURE_KEYS column.
+    """Swap waveform y from glucose to an attached demographic column.
 
-    Load with ``include_basic=True`` (see ``needs_demographics``). The original
-    glucose ``targets`` are discarded when ``label`` is not glucose.
+    Load with ``include_basic=True`` (see ``needs_demographics``). Attached
+    columns follow ``attach_demo_keys``; glucose model inputs use
+    ``basic_feature_keys`` when ``keep_demo`` is True.
     """
     key = prediction_label_key(label)
     y_unit, plot_clarke = _label_eval_kwargs(key)
     demo = np.asarray(demographics)
-    keys = list(basic_feature_keys(dataset))
+    keys = list(attach_demo_keys(dataset))
+    input_keys = list(basic_feature_keys(dataset))
+
+    def _demo_inputs(matrix: np.ndarray) -> np.ndarray:
+        if not keep_demo or not input_keys:
+            return np.empty((len(matrix), 0), dtype=np.float32)
+        keep_idx = [keys.index(name) for name in input_keys if name in keys and name != key]
+        if not keep_idx:
+            return np.empty((len(matrix), 0), dtype=np.float32)
+        return matrix[:, keep_idx].astype(np.float32, copy=False)
+
     if key == 'glucose':
         return (
-            signals, demo, np.asarray(targets), groups, sessions,
+            signals, _demo_inputs(demo), np.asarray(targets), groups, sessions,
             key, y_unit, plot_clarke,
         )
 
     if demo.ndim != 2 or demo.shape[1] != len(keys) or key not in keys:
         raise SystemExit(
-            f'--label {label!r} needs that field in BASIC_FEATURE_KEYS and a '
-            f'demographic matrix of shape (n, {len(keys)}). '
-            f'Got keys={keys}, demographics.shape={getattr(demo, "shape", None)}. '
+            f'--label {label!r} needs that field attached at load '
+            f'(attach_demo_keys={keys}). '
+            f'Got demographics.shape={getattr(demo, "shape", None)}. '
             f'{_LABEL_MISSING_HINT}'
         )
 
@@ -167,19 +179,13 @@ def retarget_waveform_arrays(
     sessions = np.asarray(sessions)[mask]
     y = y[mask].astype(np.float32, copy=False)
     demo = demo[mask]
+    demographics = _demo_inputs(demo)
     if keep_demo:
-        keep_idx = [i for i, name in enumerate(keys) if name != key]
-        demographics = (
-            demo[:, keep_idx].astype(np.float32, copy=False)
-            if keep_idx
-            else np.empty((len(y), 0), dtype=np.float32)
-        )
         print(
             f'Predicting {key} instead of glucose ({len(y)} rows); '
-            f'demographics without {key}'
+            f'demographics={list(basic_feature_keys(dataset))}'
         )
     else:
-        demographics = np.empty((len(y), 0), dtype=np.float32)
         print(f'Predicting {key} instead of glucose ({len(y)} rows); PPG only')
     return signals, demographics, y, groups, sessions, key, y_unit, plot_clarke
 
@@ -583,7 +589,7 @@ def _attach_labels_rawdata_basic(
     dataset_name: str,
 ) -> pd.DataFrame:
     out = _ppg_only_frame(df)
-    keys = basic_feature_keys(dataset_name)
+    keys = attach_demo_keys(dataset_name)
     if not keys:
         return out.reset_index(drop=True)
 
@@ -625,7 +631,7 @@ def _attach_labels_rawdata_basic(
 
 def _attach_IPS_basic(df: pd.DataFrame, root: Path) -> pd.DataFrame:
     out = _ppg_only_frame(df)
-    keys = basic_feature_keys('IPS')
+    keys = attach_demo_keys('IPS')
     if not keys:
         return out.reset_index(drop=True)
 
@@ -667,13 +673,13 @@ def _join_waveform_demographics(
     include_basic: bool,
     labels_dir: Path | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Attach BASIC_FEATURE_KEYS after cache load (same join as tabular PPG features)."""
+    """Attach demographics after cache load (same join as tabular PPG features)."""
     n = len(targets)
     empty = np.empty((n, 0), dtype=np.float32)
     if not include_basic:
         return signals, empty, targets, groups, sessions
 
-    keys = list(basic_feature_keys(dataset_name))
+    keys = list(attach_demo_keys(dataset_name))
     if not keys:
         return signals, empty, targets, groups, sessions
 
@@ -1108,7 +1114,7 @@ def _iter_hb_ppg_rows(root: Path, max_samples: int | None = None):
 
 def _attach_Hb_PPG_basic(df: pd.DataFrame, root: Path) -> pd.DataFrame:
     out = _ppg_only_frame(df)
-    keys = basic_feature_keys('Hb_PPG')
+    keys = attach_demo_keys('Hb_PPG')
     if not keys:
         return out.reset_index(drop=True)
 
@@ -1532,7 +1538,7 @@ def _load_labels_rawdata_waveform_dataset(
             continue
 
         if include_basic:
-            keys = basic_feature_keys(dataset_name)
+            keys = attach_demo_keys(dataset_name)
             basic_info_dict = extract_basic_info(row, keys)
             if keys and not basic_info_dict:
                 continue
@@ -1628,7 +1634,7 @@ def _load_IPS_waveform_dataset(
             continue
 
         if include_basic:
-            keys = basic_feature_keys('IPS')
+            keys = attach_demo_keys('IPS')
             basic_info_dict = extract_basic_info(row, keys)
             if keys and not basic_info_dict:
                 continue
@@ -1710,7 +1716,7 @@ def _load_Hb_PPG_waveform_dataset(
             continue
 
         if include_basic:
-            keys = basic_feature_keys('Hb_PPG')
+            keys = attach_demo_keys('Hb_PPG')
             basic_info_dict = extract_basic_info(row, keys)
             if keys and not basic_info_dict:
                 continue

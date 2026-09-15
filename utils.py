@@ -252,6 +252,7 @@ def _run_repeated_kfold_cv(
     seeds: Optional[Sequence[int]] = None,
     groups: Optional[np.ndarray] = None,
     sessions: Optional[np.ndarray] = None,
+    eval_groups: Optional[np.ndarray] = None,
     verbose: bool = True,
     fold_log: Optional[Callable[[Dict[str, dict]], str]] = None,
     y_unit: str = 'mmol/L',
@@ -259,6 +260,12 @@ def _run_repeated_kfold_cv(
     y = np.asarray(y, dtype=float).reshape(-1)
     if seeds is None:
         seeds = DEFAULT_SEEDS
+    if eval_groups is not None:
+        eval_groups = np.asarray(eval_groups)
+        if len(eval_groups) != len(y):
+            raise ValueError(
+                f'eval_groups length ({len(eval_groups)}) must match y ({len(y)})'
+            )
 
     fold_metrics = {name: [] for name in model_names}
     oof_sum = {name: np.zeros(len(y), dtype=float) for name in model_names}
@@ -272,6 +279,8 @@ def _run_repeated_kfold_cv(
                 mode = 'GroupKFold (subject-wise)'
             else:
                 mode = 'KFold'
+            if eval_groups is not None:
+                mode = f'{mode}; eval pooled by group'
             print(f'--- Seed {seed} ({seed_index}/{len(seeds)}) [{mode}] ---')
 
         for fold_index, (train_index, val_index) in enumerate(
@@ -282,7 +291,13 @@ def _run_repeated_kfold_cv(
             metrics_by_model = {}
             for name in model_names:
                 predictions = predictions_by_model[name]
-                metrics = evaluation.evaluate_regression(y[val_index], predictions)
+                if eval_groups is None:
+                    metrics = evaluation.evaluate_regression(y[val_index], predictions)
+                else:
+                    y_agg, pred_agg = evaluation.aggregate_by_group(
+                        y[val_index], predictions, eval_groups[val_index]
+                    )
+                    metrics = evaluation.evaluate_regression(y_agg, pred_agg)
                 fold_metrics[name].append(metrics)
                 oof_sum[name][val_index] += predictions
                 oof_count[name][val_index] += 1.0
@@ -481,6 +496,7 @@ def run_repeated_kfold_training(
     select_top_n: Optional[int] = None,
     groups: Optional[np.ndarray] = None,
     sessions: Optional[np.ndarray] = None,
+    eval_groups: Optional[np.ndarray] = None,
     verbose: bool = True,
     train_filter: Optional[Callable[[pd.DataFrame, pd.Series], np.ndarray]] = None,
     return_fold_metrics: bool = False,
@@ -492,6 +508,9 @@ def run_repeated_kfold_training(
     ``train_filter`` receives the rows of the training fold and returns a boolean
     keep-mask. Validation folds are never filtered, so metrics stay comparable to
     an unfiltered run.
+
+    ``eval_groups`` pools window-level predictions before metrics (e.g. one score
+    per recording = subject+session). Inference still runs on every window.
 
     ``return_fold_metrics`` also returns the per-fold metric dicts, ordered
     seed-major then fold. Splits depend only on y/groups/seed, so runs that differ
@@ -511,8 +530,20 @@ def run_repeated_kfold_training(
         groups = groups[mask]
         if sessions is not None:
             sessions = np.asarray(sessions)[mask]
+        if eval_groups is not None:
+            eval_groups = np.asarray(eval_groups)[mask]
     else:
         X, y = _prepare_xy(X, y)
+        if eval_groups is not None:
+            # _prepare_xy drops NaN targets; align eval_groups the same way.
+            keep = y.index
+            # y was reset; reconstruct from original length is awkward. Require
+            # callers with eval_groups to also pass groups, or pass pre-cleaned y.
+            if len(eval_groups) != len(y):
+                raise ValueError(
+                    'eval_groups must match y after cleaning; pass groups=... '
+                    'or pre-drop NaN targets so lengths align'
+                )
     seeds = DEFAULT_SEEDS
     y_values = y.values
     track_importances = feature_names is not None and len(feature_names) > 0
@@ -538,6 +569,11 @@ def run_repeated_kfold_training(
             extras.append(
                 f'Split: GroupKFold by subject_ID '
                 f'({len(np.unique(groups))} unique subjects)'
+            )
+        if eval_groups is not None:
+            extras.append(
+                f'Eval pooling: {len(np.unique(eval_groups))} groups '
+                f'(mean window predictions within each group)'
             )
         if train_filter is not None:
             extras.append('Train-fold filter: enabled (validation folds keep all rows)')
@@ -602,6 +638,7 @@ def run_repeated_kfold_training(
         seeds=seeds,
         groups=groups,
         sessions=sessions,
+        eval_groups=eval_groups,
         verbose=verbose,
         y_unit=y_unit,
     )
@@ -611,6 +648,7 @@ def run_repeated_kfold_training(
         y_values,
         plot_model=model_name,
         verbose=False,
+        eval_groups=eval_groups,
     )
 
     if track_importances and importance_runs > 0:
@@ -645,10 +683,15 @@ def run_repeated_kfold_training(
                     index=False,
                 )
             )
+        y_plot, pred_plot = y_values, oof_predictions
+        if eval_groups is not None and oof_predictions is not None:
+            y_plot, pred_plot = evaluation.aggregate_by_group(
+                y_values, oof_predictions, eval_groups
+            )
         evaluation.print_cv_results(
             summary_df,
-            y_values,
-            oof_predictions,
+            y_plot,
+            pred_plot,
             y_unit=y_unit,
             plot_clarke=plot_clarke,
         )

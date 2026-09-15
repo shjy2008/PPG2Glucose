@@ -37,14 +37,17 @@ DEFAULT_VITALDB_PPG_SECONDS = 60.0
 # ('sex', 'age', 'height', 'weight'), ('age', 'height', 'weight', 'bmi')
 BASIC_FEATURE_KEYS = {
     'IPS': ('age', 'height', 'weight', 'bmi'),
-    # MUST: age+weight + g3-g6; with CatBoost depth=4 → MAE 0.7075, R2 +0.0003.
-    # (depth=3 was MAE 0.7109 / R2 -0.0140; age-only baseline MAE 0.7119 / R2 -0.0182)
+    # MUST glucose+demo baseline: age+weight only (depth=4 → MAE 0.7075, R2 +0.0003).
     'MUST': ('age', 'weight'),
     'vitaldb': ('age', 'height', 'weight', 'bmi'),
     # Height/weight missing for 77/217 glucose-labeled subjects (marked "/").
     'Hb_PPG': ('age', 'height', 'weight', 'bmi'),
 }
 DEFAULT_BASIC_FEATURE_KEYS = ()
+
+# Joined at load for --label age|height|weight|bmi. Glucose model inputs still use
+# BASIC_FEATURE_KEYS only (extra attached demos are dropped from X).
+ATTACH_DEMO_KEYS = ('age', 'height', 'weight', 'bmi')
 
 # Shared default for repeated k-fold CV (5-fold x 5 seeds = 25 evaluations).
 DEFAULT_SEEDS = (42, 52, 62, 72, 82)
@@ -194,6 +197,12 @@ def resolve_config_dataset(dataset: str | Path | None) -> str:
 
 def basic_feature_keys(dataset: str) -> tuple:
     return BASIC_FEATURE_KEYS.get(resolve_config_dataset(dataset), DEFAULT_BASIC_FEATURE_KEYS)
+
+
+def attach_demo_keys(dataset: str | None = None) -> tuple:
+    """Demographics columns to join from labels (superset of BASIC_FEATURE_KEYS)."""
+    del dataset  # Same attach set for IPS / MUST / VitalDB / Hb_PPG.
+    return ATTACH_DEMO_KEYS
 
 
 def ppg_sampling_rate(dataset: str) -> float:
