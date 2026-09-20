@@ -1,7 +1,5 @@
 import argparse
 
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVR
 
 import data_loader
@@ -16,10 +14,8 @@ def build_parser():
 
 
 def build_model(_seed: int):
-    return Pipeline([
-        ('scaler', StandardScaler()),
-        ('model', SVR(C=10.0, gamma='scale', epsilon=0.1, kernel='rbf')),
-    ])
+    # Feature z-score is applied in utils._impute_features (fit on train fold).
+    return SVR(C=10.0, gamma='scale', epsilon=0.1, kernel='rbf')
 
 
 def main():

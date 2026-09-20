@@ -20,6 +20,7 @@ from config import (
     ppg_best_segment_seconds,
     ppg_feature_groups,
     ppg_filter,
+    ppg_normalize,
     ppg_sampling_rate,
     ppg_csv_column,
     ppg_csv_column_fingerprint,
@@ -319,6 +320,7 @@ def _waveform_cache_fingerprint(
         'ppg_target_fs': ppg_target_fs(dataset_name),
         'ppg_trim_fractions': list(ppg_trim_fractions(dataset_name)),
         'ppg_filter': ppg_filter(dataset_name),
+        'ppg_normalize': ppg_normalize(dataset_name),
         'ppg_csv_column': ppg_csv_column_fingerprint(dataset_name),
         'identity': identity,
     }
@@ -446,6 +448,7 @@ def _ppg_cache_fingerprint(
         'ppg_feature_groups': list(ppg_feature_groups(dataset_name)),
         'ppg_trim_fractions': list(ppg_trim_fractions(dataset_name)),
         'ppg_filter': ppg_filter(dataset_name),
+        'ppg_normalize': ppg_normalize(dataset_name),
         'ppg_best_segment_seconds': ppg_best_segment_seconds(dataset_name),
         'ppg_best_segment_hop_seconds': PPG_BEST_SEGMENT_HOP_SECONDS,
         'ppg_sqa_threshold': ppg_sqa_threshold(dataset_name),
@@ -465,6 +468,7 @@ def _ppg_only_frame(df: pd.DataFrame) -> pd.DataFrame:
 _FINGERPRINT_OPTIONAL_DEFAULTS = {
     'ppg_center_window_seconds': None,
     'ppg_csv_column': None,
+    'ppg_normalize': 'none',
     'window_seconds': 0.0,
 }
 
@@ -723,6 +727,7 @@ def _ppg_feature_dicts(
     """Full-signal features when window_seconds<=0; else one dict per window."""
     trim_fractions = ppg_trim_fractions(dataset_name)
     filter_name = ppg_filter(dataset_name)
+    normalize = ppg_normalize(dataset_name)
     target_fs = ppg_target_fs(dataset_name)
     best_segment_seconds = ppg_best_segment_seconds(dataset_name)
     feature_groups = ppg_feature_groups(dataset_name)
@@ -742,6 +747,7 @@ def _ppg_feature_dicts(
             sqa_window_seconds=PPG_SQA_WINDOW_SECONDS,
             center_window_seconds=center_window_seconds,
             csv_column=ppg_csv_column(dataset_name),
+            normalize=normalize,
         )
         return [] if features is None else [features]
     return extract_raw_ppg_windows(
@@ -756,6 +762,7 @@ def _ppg_feature_dicts(
         sqa_threshold=sqa_threshold,
         center_window_seconds=center_window_seconds,
         csv_column=ppg_csv_column(dataset_name),
+        normalize=normalize,
     )
 
 
@@ -1562,6 +1569,7 @@ def _load_labels_rawdata_waveform_dataset(
             target_fs=ppg_target_fs(dataset_name),
             center_window_seconds=center_seconds,
             csv_column=ppg_csv_column(dataset_name),
+            normalize=ppg_normalize(dataset_name),
         ).astype(np.float32, copy=False)
         if waveform.size == 0:
             print('Skipping', label_path.name, 'because signal is empty')
@@ -1653,6 +1661,7 @@ def _load_IPS_waveform_dataset(
             target_fs=ppg_target_fs('IPS'),
             center_window_seconds=center_seconds,
             csv_column=ppg_csv_column('IPS'),
+            normalize=ppg_normalize('IPS'),
         ).astype(np.float32, copy=False)
         if waveform.size == 0:
             print('Skipping subject', subject_id_int, 'because signal is empty')
@@ -1735,6 +1744,7 @@ def _load_Hb_PPG_waveform_dataset(
             target_fs=ppg_target_fs('Hb_PPG'),
             center_window_seconds=center_seconds,
             csv_column=ppg_csv_column('Hb_PPG'),
+            normalize=ppg_normalize('Hb_PPG'),
         ).astype(np.float32, copy=False)
         if waveform.size == 0:
             print('Skipping subject', subject_id, 'because signal is empty')

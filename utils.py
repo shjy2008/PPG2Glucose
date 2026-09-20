@@ -5,6 +5,7 @@ from typing import Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
 
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import GroupKFold, KFold
+from sklearn.preprocessing import StandardScaler
 
 import evaluation
 from config import DEFAULT_SEEDS, TARGET_OUTLIER_LOWER_Q, TARGET_OUTLIER_UPPER_Q
@@ -77,17 +78,29 @@ def _impute_features(
     X_train: pd.DataFrame,
     X_other: pd.DataFrame,
     imputer: Optional[SimpleImputer] = None,
-) -> tuple[pd.DataFrame, pd.DataFrame, SimpleImputer]:
+    scaler: Optional[StandardScaler] = None,
+    *,
+    scale: bool = True,
+) -> tuple[pd.DataFrame, pd.DataFrame, tuple[SimpleImputer, Optional[StandardScaler]]]:
+    """Median-impute, then optionally z-score features (fit on train only)."""
     if imputer is None:
         imputer = SimpleImputer(strategy='median')
         train_values = imputer.fit_transform(X_train)
     else:
         train_values = imputer.transform(X_train)
 
-    X_train_imputed = pd.DataFrame(train_values, columns=X_train.columns, index=X_train.index)
     other_values = imputer.transform(X_other)
-    X_other_imputed = pd.DataFrame(other_values, columns=X_other.columns, index=X_other.index)
-    return X_train_imputed, X_other_imputed, imputer
+    if scale:
+        if scaler is None:
+            scaler = StandardScaler()
+            train_values = scaler.fit_transform(train_values)
+        else:
+            train_values = scaler.transform(train_values)
+        other_values = scaler.transform(other_values)
+
+    X_train_proc = pd.DataFrame(train_values, columns=X_train.columns, index=X_train.index)
+    X_other_proc = pd.DataFrame(other_values, columns=X_other.columns, index=X_other.index)
+    return X_train_proc, X_other_proc, (imputer, scaler)
 
 
 def _normalized_feature_importances(model) -> Optional[np.ndarray]:

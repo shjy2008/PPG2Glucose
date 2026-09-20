@@ -10,6 +10,7 @@ from config import (
     DEFAULT_PPG_BEST_SEGMENT_SECONDS,
     DEFAULT_PPG_FEATURE_GROUPS,
     DEFAULT_PPG_FILTER,
+    DEFAULT_PPG_NORMALIZE,
     DEFAULT_PPG_SAMPLING_RATE,
     DEFAULT_PPG_TARGET_FS,
     DEFAULT_PPG_TRIM_FRACTIONS,
@@ -209,6 +210,39 @@ def apply_ppg_filter(
     raise ValueError(
         f'Unknown PPG filter: {filter_name!r} '
         f'(expected none|mswf|butterworth|butterworth_0.5_8|butterworth_0.5_5)'
+    )
+
+
+def zscore_normalize_signal(signal: np.ndarray) -> np.ndarray:
+    """Per-channel zero-mean / unit-variance normalization."""
+
+    def _one(values: np.ndarray) -> np.ndarray:
+        values = np.asarray(values, dtype=float).reshape(-1)
+        if values.size == 0 or not np.isfinite(values).all():
+            return values
+        mean = float(np.mean(values))
+        std = float(np.std(values))
+        if std < 1e-12:
+            return values - mean
+        return (values - mean) / std
+
+    return _apply_per_channel(signal, _one)
+
+
+def apply_ppg_normalize(
+    signal: np.ndarray,
+    normalize: str = DEFAULT_PPG_NORMALIZE,
+) -> np.ndarray:
+    name = (normalize or 'none').strip().lower()
+    if name in {'', 'none', 'off', 'false'}:
+        arr = np.asarray(signal, dtype=float)
+        if arr.ndim == 1:
+            return arr.reshape(-1)
+        return arr
+    if name in {'zscore', 'z-score', 'standard', 'true', 'on', '1'}:
+        return zscore_normalize_signal(signal)
+    raise ValueError(
+        f'Unknown PPG normalize mode: {normalize!r} (expected none|zscore)'
     )
 
 
@@ -419,8 +453,9 @@ def read_signal_waveform(
     target_fs: float | None = DEFAULT_PPG_TARGET_FS,
     center_window_seconds: float | None = None,
     csv_column: str | Sequence[str] | None = None,
+    normalize: str = DEFAULT_PPG_NORMALIZE,
 ) -> np.ndarray:
-    """Return PPG samples (trim → filter at native fs → optional downsample → center crop).
+    """Return PPG samples (trim → filter → downsample → crop → optional normalize).
 
     One CSV column yields a 1-D array of length T. Several columns yield (C, T).
     """
@@ -434,12 +469,13 @@ def read_signal_waveform(
         lambda values: downsample_signal(values, source_fs=fs, target_fs=target_fs),
     )
     fs_eff = effective_sampling_rate(fs, target_fs)
-    return _apply_per_channel(
+    signal = _apply_per_channel(
         signal,
         lambda values: center_crop_seconds(
             values, fs=fs_eff, window_seconds=center_window_seconds
         ),
     )
+    return apply_ppg_normalize(signal, normalize=normalize)
 
 
 def _csv_has_header(columns) -> bool:
@@ -914,6 +950,7 @@ def extract_raw_ppg(
     sqa_window_seconds: float = PPG_SQA_WINDOW_SECONDS,
     center_window_seconds: float | None = None,
     csv_column: str | Sequence[str] | None = None,
+    normalize: str = DEFAULT_PPG_NORMALIZE,
 ) -> dict | None:
     signal = read_signal_waveform(
         Path(signal_path),
@@ -923,6 +960,7 @@ def extract_raw_ppg(
         target_fs=target_fs,
         center_window_seconds=center_window_seconds,
         csv_column=csv_column,
+        normalize=normalize,
     )
     fs_eff = effective_sampling_rate(fs, target_fs)
     signal = select_best_segment(signal, fs=fs_eff, window_seconds=best_segment_seconds)
@@ -982,7 +1020,9 @@ def extract_raw_ppg_windows(
     sqa_threshold: float | None = None,
     center_window_seconds: float | None = None,
     csv_column: str | Sequence[str] | None = None,
+    normalize: str = DEFAULT_PPG_NORMALIZE,
 ) -> list[dict]:
+    # Normalize per window (not the full recording) so each segment is unit-scale.
     signal = read_signal_waveform(
         Path(signal_path),
         trim_fractions=trim_fractions,
@@ -991,11 +1031,13 @@ def extract_raw_ppg_windows(
         target_fs=target_fs,
         center_window_seconds=center_window_seconds,
         csv_column=csv_column,
+        normalize='none',
     )
     fs_eff = effective_sampling_rate(fs, target_fs)
     signal = select_best_segment(signal, fs=fs_eff, window_seconds=best_segment_seconds)
     features = []
     for window in segment_signal(signal, fs=fs_eff, window_seconds=window_seconds):
+        window = apply_ppg_normalize(window, normalize=normalize)
         if sqa_threshold is not None:
             if window.ndim == 1:
                 if ppg_ssqi(window) <= float(sqa_threshold):

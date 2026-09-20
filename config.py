@@ -125,6 +125,18 @@ PPG_FILTER = {
 }
 DEFAULT_PPG_FILTER = 'none'
 
+# Per-channel amplitude normalization after trim/filter/downsample/crop.
+# 'zscore' = (x - mean) / std (common in PPG DL papers).
+# 'none' keeps raw amplitudes (needed for amplitude-sensitive handcrafted features).
+# Try-6 CatBoost: zscore hurt — IPS MAE 0.578→0.608, MUST 0.731→0.749. Keep off.
+PPG_NORMALIZE = {
+    'MUST': 'none',
+    'IPS': 'none',
+    'vitaldb': 'none',
+    'Hb_PPG': 'none',
+}
+DEFAULT_PPG_NORMALIZE = 'none'
+
 # Optional best-window selection before feature extraction.
 # A positive duration selects the overlapping window with the highest skewness SSQI.
 # MUST 4 s window / 1 s hop raised CatBoost MAE 0.7311 → 0.7685, so default off.
@@ -226,6 +238,10 @@ def ppg_trim_fractions(dataset: str) -> tuple[float, float]:
 
 def ppg_filter(dataset: str) -> str:
     return PPG_FILTER.get(resolve_config_dataset(dataset), DEFAULT_PPG_FILTER)
+
+
+def ppg_normalize(dataset: str) -> str:
+    return PPG_NORMALIZE.get(resolve_config_dataset(dataset), DEFAULT_PPG_NORMALIZE)
 
 
 def ppg_target_fs(dataset: str):
