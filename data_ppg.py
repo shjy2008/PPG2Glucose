@@ -134,6 +134,62 @@ def mswf_filter(
     return smoothed - baseline
 
 
+def _parse_butterworth_name(name: str) -> tuple[float, float, int] | None:
+    """Return (low_hz, high_hz, order) for butterworth aliases, else None.
+
+    Accepted: butterworth / butter / bw (default 0.5–8 Hz, order 3),
+    or butterworth_0.5_8 / butter_0.5_5 (order still 3).
+    """
+    if name in {'butterworth', 'butter', 'bw'}:
+        return 0.5, 8.0, 3
+    for prefix in ('butterworth_', 'butter_', 'bw_'):
+        if not name.startswith(prefix):
+            continue
+        parts = name[len(prefix) :].split('_')
+        if len(parts) != 2:
+            return None
+        try:
+            low_hz, high_hz = float(parts[0]), float(parts[1])
+        except ValueError:
+            return None
+        if not (0.0 < low_hz < high_hz):
+            return None
+        return low_hz, high_hz, 3
+    return None
+
+
+def butterworth_bandpass_filter(
+    signal: np.ndarray,
+    fs: float,
+    *,
+    low_hz: float = 0.5,
+    high_hz: float = 8.0,
+    order: int = 3,
+) -> np.ndarray:
+    """Zero-phase Butterworth band-pass (common PPG→glucose preprocessing)."""
+    values = np.asarray(signal, dtype=float).reshape(-1)
+    rate = float(fs)
+    if values.size < 16 or rate <= 0 or not np.isfinite(values).all():
+        return values
+
+    nyquist = 0.5 * rate
+    low = float(low_hz)
+    high = min(float(high_hz), nyquist * 0.99)
+    if not (0.0 < low < high < nyquist):
+        return values
+
+    try:
+        from scipy.signal import butter, sosfiltfilt
+
+        sos = butter(int(order), [low, high], btype='bandpass', fs=rate, output='sos')
+        # sosfiltfilt needs enough samples for its default padlen.
+        if values.size <= 3 * (2 * int(order) + 1):
+            return values
+        return sosfiltfilt(sos, values).astype(float, copy=False)
+    except Exception:
+        return values
+
+
 def apply_ppg_filter(
     signal: np.ndarray,
     fs: float,
@@ -144,7 +200,16 @@ def apply_ppg_filter(
         return np.asarray(signal, dtype=float).reshape(-1)
     if name == 'mswf':
         return mswf_filter(signal, fs)
-    raise ValueError(f'Unknown PPG filter: {filter_name!r} (expected none|mswf)')
+    butter = _parse_butterworth_name(name)
+    if butter is not None:
+        low_hz, high_hz, order = butter
+        return butterworth_bandpass_filter(
+            signal, fs, low_hz=low_hz, high_hz=high_hz, order=order
+        )
+    raise ValueError(
+        f'Unknown PPG filter: {filter_name!r} '
+        f'(expected none|mswf|butterworth|butterworth_0.5_8|butterworth_0.5_5)'
+    )
 
 
 def effective_sampling_rate(source_fs: float, target_fs: float | None) -> float:

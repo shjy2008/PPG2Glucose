@@ -104,7 +104,11 @@ PPG_TRIM_FRACTIONS = {
 DEFAULT_PPG_TRIM_FRACTIONS = (0.0, 0.0)
 
 # PPG time-domain filter applied after trim, before feature extraction.
-# Options: 'none', 'mswf' (Chen et al. JBHI 2024 multi-size weighted fitting).
+# Options:
+#   'none'
+#   'mswf' (Chen et al. JBHI 2024 multi-size weighted fitting)
+#   'butterworth' / 'butterworth_0.5_8' (3rd-order band-pass 0.5–8 Hz; common PPG→BG)
+#   'butterworth_0.5_5' (2nd/3rd-order lit. variant; we use order 3)
 # Try-1 IPS CatBoost: mswf raised MAE 0.5785 → 0.6119, so default off.
 # MUST CatBoost ablation (subject-wise 5x5 CV, baseline MAE 0.7311):
 # target_fs=100 only 0.7633; mswf only 0.7964; combined 0.7950. Keep both off.
@@ -112,7 +116,7 @@ DEFAULT_PPG_TRIM_FRACTIONS = (0.0, 0.0)
 # bands 0.5–4 Hz, rate-normalized derivatives) → MAE 0.7468 (no gain). Keep fixes.
 PPG_FILTER = {
     'MUST': 'none',
-    'IPS': 'none',
+    'IPS': 'mswf',
     'vitaldb': 'none',
     'Hb_PPG': 'none',
 }
