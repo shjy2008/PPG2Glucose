@@ -114,9 +114,12 @@ DEFAULT_PPG_TRIM_FRACTIONS = (0.0, 0.0)
 # target_fs=100 only 0.7633; mswf only 0.7964; combined 0.7950. Keep both off.
 # Try-4 MUST: fs-aware physiological feature units (IBI/lag in seconds, cardiac
 # bands 0.5–4 Hz, rate-normalized derivatives) → MAE 0.7468 (no gain). Keep fixes.
+# Try-5 IPS CatBoost: butterworth 0.5–8 Hz raised MAE 0.5786 → 0.6047 (same
+# direction as mswf). Band-pass strips DC and breaks DC-sensitive features.
+# Keep filtering off for handcrafted-feature CatBoost.
 PPG_FILTER = {
     'MUST': 'none',
-    'IPS': 'mswf',
+    'IPS': 'none',
     'vitaldb': 'none',
     'Hb_PPG': 'none',
 }
