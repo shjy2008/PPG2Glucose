@@ -312,15 +312,102 @@ def ppg_ssqi(signal: np.ndarray) -> float:
     return float(np.mean(centered ** 3))
 
 
+def _ppg_peak_indices(signal: np.ndarray, fs: float) -> np.ndarray:
+    """Systolic-peak sample indices on a lightly band-passed copy; empty on failure."""
+    values = np.asarray(signal, dtype=float).reshape(-1)
+    if values.size < max(16, int(round(2.0 * float(fs)))):
+        return np.asarray([], dtype=int)
+    try:
+        from scipy.signal import butter, find_peaks, resample, sosfiltfilt
+    except Exception:
+        return np.asarray([], dtype=int)
+
+    quality_fs = min(float(fs), 100.0)
+    n_quality = max(16, int(round(values.size * quality_fs / float(fs))))
+    quality_signal = (
+        resample(values, n_quality) if n_quality < values.size else values.copy()
+    )
+    centered = quality_signal - np.mean(quality_signal)
+    sos = butter(3, [0.5, 8.0], btype='bandpass', fs=quality_fs, output='sos')
+    pulse_band = sosfiltfilt(sos, centered)
+    peaks, _ = find_peaks(
+        pulse_band,
+        distance=max(3, int(round(0.3 * quality_fs))),
+        prominence=max(0.15 * float(np.std(pulse_band)), 1e-9),
+    )
+    if peaks.size == 0 or quality_fs >= float(fs) * 0.999:
+        return peaks.astype(int)
+    # Map peak indices from the quality-rate grid back to native samples.
+    scale = float(values.size) / float(quality_signal.size)
+    return np.clip(np.round(peaks.astype(float) * scale).astype(int), 0, values.size - 1)
+
+
+def ppg_template_sqi(signal: np.ndarray, fs: float) -> float:
+    """Mean cosine similarity of beats to the mean-pulse template.
+
+    Orphanidou / Sci Rep 2024-style morphology SQA. Each beat is mean-centered and
+    L2-normalized before averaging into a template; the score is the mean cosine
+    similarity of beats to that template. Returns 0 if fewer than 3 usable beats.
+    """
+    values = np.asarray(signal, dtype=float).reshape(-1)
+    peaks = _ppg_peak_indices(values, fs)
+    if peaks.size < 3:
+        return 0.0
+
+    beat_len = int(np.median(np.diff(peaks)))
+    if beat_len < 4:
+        return 0.0
+    half = beat_len // 2
+
+    beats: list[np.ndarray] = []
+    for peak in peaks:
+        start = int(peak) - half
+        end = start + beat_len
+        if start < 0 or end > values.size:
+            continue
+        beat = values[start:end].astype(float, copy=True)
+        beat -= float(np.mean(beat))
+        norm = float(np.linalg.norm(beat))
+        if norm < 1e-12:
+            continue
+        beats.append(beat / norm)
+
+    if len(beats) < 3:
+        return 0.0
+
+    stacked = np.stack(beats, axis=0)
+    template = stacked.mean(axis=0)
+    t_norm = float(np.linalg.norm(template))
+    if t_norm < 1e-12:
+        return 0.0
+    template /= t_norm
+    return float(np.mean(stacked @ template))
+
+
+def ppg_quality_score(
+    signal: np.ndarray,
+    fs: float,
+    method: str = 'template',
+) -> float:
+    """Dispatch SQA score: 'template' (cosine-to-mean-pulse) or 'ssqi' (skewness)."""
+    name = str(method).strip().lower()
+    if name in ('template', 'template_sqi', 'tsqi'):
+        return ppg_template_sqi(signal, fs)
+    if name in ('ssqi', 'skew', 'skewness'):
+        return ppg_ssqi(signal)
+    raise ValueError(f'Unknown PPG SQA method {method!r} (expected template|ssqi)')
+
+
 def select_best_segment(
     signal: np.ndarray,
     fs: float,
     window_seconds: float | None,
     hop_seconds: float = PPG_BEST_SEGMENT_HOP_SECONDS,
+    sqa_method: str = 'template',
 ) -> np.ndarray:
-    """Select the overlapping full window with the highest skewness SSQI.
+    """Select the overlapping full window with the highest SQA score.
 
-    Multi-channel signals keep a shared time window (mean SSQI across channels).
+    Multi-channel signals keep a shared time window (mean score across channels).
     """
     values = np.asarray(signal, dtype=float)
     if values.size == 0 or window_seconds is None:
@@ -337,7 +424,9 @@ def select_best_segment(
         starts = range(0, values.size - window_samples + 1, hop_samples)
         best_start = max(
             starts,
-            key=lambda start: ppg_ssqi(values[start : start + window_samples]),
+            key=lambda start: ppg_quality_score(
+                values[start : start + window_samples], fs, method=sqa_method
+            ),
         )
         return values[best_start : best_start + window_samples]
 
@@ -351,7 +440,12 @@ def select_best_segment(
     def _score(start: int) -> float:
         return float(
             np.mean(
-                [ppg_ssqi(channel[start : start + window_samples]) for channel in values]
+                [
+                    ppg_quality_score(
+                        channel[start : start + window_samples], fs, method=sqa_method
+                    )
+                    for channel in values
+                ]
             )
         )
 
@@ -364,12 +458,13 @@ def select_sqa_windows(
     fs: float,
     threshold: float,
     window_seconds: float = PPG_SQA_WINDOW_SECONDS,
+    sqa_method: str = 'template',
 ) -> list[np.ndarray]:
-    """Keep non-overlapping windows with SSQI > threshold."""
+    """Keep non-overlapping windows with quality score > threshold."""
     return [
         window
         for window in segment_signal(signal, fs=fs, window_seconds=window_seconds)
-        if ppg_ssqi(window) > float(threshold)
+        if ppg_quality_score(window, fs, method=sqa_method) > float(threshold)
     ]
 
 
@@ -378,8 +473,9 @@ def apply_sqa_mask(
     fs: float,
     threshold: float | None,
     window_seconds: float = PPG_SQA_WINDOW_SECONDS,
+    sqa_method: str = 'template',
 ) -> np.ndarray | None:
-    """Concatenate SSQI-accepted windows. None if SQA rejects the whole signal.
+    """Concatenate SQA-accepted windows. None if SQA rejects the whole signal.
 
     Multi-channel signals keep a window only when every channel passes.
     """
@@ -388,7 +484,11 @@ def apply_sqa_mask(
         return values
     if values.ndim == 1:
         good = select_sqa_windows(
-            values, fs=fs, threshold=threshold, window_seconds=window_seconds
+            values,
+            fs=fs,
+            threshold=threshold,
+            window_seconds=window_seconds,
+            sqa_method=sqa_method,
         )
         if not good:
             return None
@@ -397,7 +497,10 @@ def apply_sqa_mask(
         raise ValueError(f'PPG signal must be 1-D or (C, T), got shape {values.shape}')
     kept = []
     for window in segment_signal(values, fs=fs, window_seconds=window_seconds):
-        if all(ppg_ssqi(channel) > float(threshold) for channel in window):
+        if all(
+            ppg_quality_score(channel, fs, method=sqa_method) > float(threshold)
+            for channel in window
+        ):
             kept.append(window)
     if not kept:
         return None
@@ -822,6 +925,15 @@ def _quality_features(signal: np.ndarray, prefix: str, fs: float) -> dict:
     accepted_fraction = (
         float(np.mean(np.asarray(window_scores) > 0.3)) if window_scores else 0.0
     )
+    template_window_scores = [
+        ppg_template_sqi(values[start : start + window_samples], fs)
+        for start in range(0, values.size - window_samples + 1, window_samples)
+    ]
+    template_accepted_fraction = (
+        float(np.mean(np.asarray(template_window_scores) > 0.85))
+        if template_window_scores
+        else 0.0
+    )
 
     peak_regularity = 0.0
     noise_ratio = 0.0
@@ -864,9 +976,11 @@ def _quality_features(signal: np.ndarray, prefix: str, fs: float) -> dict:
 
     return {
         f'{prefix}ppg_ssqi': ppg_ssqi(values),
+        f'{prefix}ppg_template_sqi': ppg_template_sqi(values, fs),
         f'{prefix}ppg_peak_regularity': peak_regularity,
         f'{prefix}ppg_noise_ratio': noise_ratio,
         f'{prefix}ppg_accepted_window_fraction': accepted_fraction,
+        f'{prefix}ppg_template_accepted_fraction': template_accepted_fraction,
     }
 
 
@@ -948,6 +1062,7 @@ def extract_raw_ppg(
     feature_groups: tuple[str, ...] = DEFAULT_PPG_FEATURE_GROUPS,
     sqa_threshold: float | None = None,
     sqa_window_seconds: float = PPG_SQA_WINDOW_SECONDS,
+    sqa_method: str = 'template',
     center_window_seconds: float | None = None,
     csv_column: str | Sequence[str] | None = None,
     normalize: str = DEFAULT_PPG_NORMALIZE,
@@ -963,12 +1078,18 @@ def extract_raw_ppg(
         normalize=normalize,
     )
     fs_eff = effective_sampling_rate(fs, target_fs)
-    signal = select_best_segment(signal, fs=fs_eff, window_seconds=best_segment_seconds)
+    signal = select_best_segment(
+        signal,
+        fs=fs_eff,
+        window_seconds=best_segment_seconds,
+        sqa_method=sqa_method,
+    )
     signal = apply_sqa_mask(
         signal,
         fs=fs_eff,
         threshold=sqa_threshold,
         window_seconds=sqa_window_seconds,
+        sqa_method=sqa_method,
     )
     if signal is None or signal.size == 0:
         return None
@@ -1018,6 +1139,7 @@ def extract_raw_ppg_windows(
     best_segment_seconds: float | None = DEFAULT_PPG_BEST_SEGMENT_SECONDS,
     feature_groups: tuple[str, ...] = DEFAULT_PPG_FEATURE_GROUPS,
     sqa_threshold: float | None = None,
+    sqa_method: str = 'template',
     center_window_seconds: float | None = None,
     csv_column: str | Sequence[str] | None = None,
     normalize: str = DEFAULT_PPG_NORMALIZE,
@@ -1034,15 +1156,26 @@ def extract_raw_ppg_windows(
         normalize='none',
     )
     fs_eff = effective_sampling_rate(fs, target_fs)
-    signal = select_best_segment(signal, fs=fs_eff, window_seconds=best_segment_seconds)
+    signal = select_best_segment(
+        signal,
+        fs=fs_eff,
+        window_seconds=best_segment_seconds,
+        sqa_method=sqa_method,
+    )
     features = []
     for window in segment_signal(signal, fs=fs_eff, window_seconds=window_seconds):
         window = apply_ppg_normalize(window, normalize=normalize)
         if sqa_threshold is not None:
             if window.ndim == 1:
-                if ppg_ssqi(window) <= float(sqa_threshold):
+                if ppg_quality_score(window, fs_eff, method=sqa_method) <= float(
+                    sqa_threshold
+                ):
                     continue
-            elif any(ppg_ssqi(channel) <= float(sqa_threshold) for channel in window):
+            elif any(
+                ppg_quality_score(channel, fs_eff, method=sqa_method)
+                <= float(sqa_threshold)
+                for channel in window
+            ):
                 continue
         features.append(
             extract_channel_features(

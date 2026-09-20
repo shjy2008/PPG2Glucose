@@ -24,6 +24,7 @@ from config import (
     ppg_sampling_rate,
     ppg_csv_column,
     ppg_csv_column_fingerprint,
+    ppg_sqa_method,
     ppg_sqa_threshold,
     ppg_target_fs,
     ppg_trim_fractions,
@@ -451,6 +452,7 @@ def _ppg_cache_fingerprint(
         'ppg_normalize': ppg_normalize(dataset_name),
         'ppg_best_segment_seconds': ppg_best_segment_seconds(dataset_name),
         'ppg_best_segment_hop_seconds': PPG_BEST_SEGMENT_HOP_SECONDS,
+        'ppg_sqa_method': ppg_sqa_method(dataset_name),
         'ppg_sqa_threshold': ppg_sqa_threshold(dataset_name),
         'ppg_sqa_window_seconds': PPG_SQA_WINDOW_SECONDS,
         'ppg_center_window_seconds': center_window_seconds,
@@ -469,6 +471,7 @@ _FINGERPRINT_OPTIONAL_DEFAULTS = {
     'ppg_center_window_seconds': None,
     'ppg_csv_column': None,
     'ppg_normalize': 'none',
+    'ppg_sqa_method': 'ssqi',
     'window_seconds': 0.0,
 }
 
@@ -732,6 +735,7 @@ def _ppg_feature_dicts(
     best_segment_seconds = ppg_best_segment_seconds(dataset_name)
     feature_groups = ppg_feature_groups(dataset_name)
     sqa_threshold = ppg_sqa_threshold(dataset_name)
+    sqa_method = ppg_sqa_method(dataset_name)
     if center_window_seconds is None:
         center_window_seconds = resolve_ppg_center_window_seconds()
     if window_seconds is None or window_seconds <= 0:
@@ -745,6 +749,7 @@ def _ppg_feature_dicts(
             feature_groups=feature_groups,
             sqa_threshold=sqa_threshold,
             sqa_window_seconds=PPG_SQA_WINDOW_SECONDS,
+            sqa_method=sqa_method,
             center_window_seconds=center_window_seconds,
             csv_column=ppg_csv_column(dataset_name),
             normalize=normalize,
@@ -760,6 +765,7 @@ def _ppg_feature_dicts(
         best_segment_seconds=best_segment_seconds,
         feature_groups=feature_groups,
         sqa_threshold=sqa_threshold,
+        sqa_method=sqa_method,
         center_window_seconds=center_window_seconds,
         csv_column=ppg_csv_column(dataset_name),
         normalize=normalize,

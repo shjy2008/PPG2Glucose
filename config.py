@@ -138,8 +138,8 @@ PPG_NORMALIZE = {
 DEFAULT_PPG_NORMALIZE = 'none'
 
 # Optional best-window selection before feature extraction.
-# A positive duration selects the overlapping window with the highest skewness SSQI.
-# MUST 4 s window / 1 s hop raised CatBoost MAE 0.7311 → 0.7685, so default off.
+# A positive duration selects the overlapping window with the highest SQA score
+# (see PPG_SQA_METHOD). MUST 4 s / 1 s hop raised CatBoost MAE 0.7311 → 0.7685.
 PPG_BEST_SEGMENT_SECONDS = {
     'MUST': None,  # 4.0
     'IPS': None,
@@ -149,15 +149,29 @@ PPG_BEST_SEGMENT_SECONDS = {
 DEFAULT_PPG_BEST_SEGMENT_SECONDS = None
 PPG_BEST_SEGMENT_HOP_SECONDS = 1.0
 
-# Skewness-based SSQI threshold (Chen et al. JBHI 2024). None disables SQA.
-# Accept 6 s windows with SSQI > threshold, then concatenate for full-signal features.
-# Try-2 IPS CatBoost: sqa=0.3 kept 191/252, MAE 0.5785 → 0.6001, so default off.
+# Signal-quality gate before feature extraction. None disables hard filtering.
+# Accept non-overlapping PPG_SQA_WINDOW_SECONDS windows with score > threshold,
+# then concatenate for full-signal features.
+# Methods:
+#   'template' — mean cosine similarity of beats to mean-pulse template
+#                (Orphanidou / Sci Rep 2024 PPG→BG; typical cut ≈ 0.85)
+#   'ssqi'     — skewness (Elgendi / Chen et al. JBHI 2024; typical cut ≈ 0.3)
+# Try-2 IPS CatBoost: ssqi=0.3 kept 191/252, MAE 0.5785 → 0.6001, so default off.
+PPG_SQA_METHOD = {
+    'MUST': 'template',
+    'IPS': 'template',
+    'vitaldb': 'template',
+    'Hb_PPG': 'template',
+}
+DEFAULT_PPG_SQA_METHOD = 'template'
 PPG_SQA_THRESHOLD = {
-    'MUST': None, # 0.3
+    'MUST': None,  # 0.85 for template, 0.3 for ssqi
     'IPS': None,
     'vitaldb': None,
     'Hb_PPG': None,
 }
+DEFAULT_PPG_SQA_THRESHOLD = None
+PPG_SQA_WINDOW_SECONDS = 6.0
 
 # Named CSV column(s) for multi-wavelength files. None = first column (MUST / vitaldb).
 # A string selects one channel. A tuple/list extracts each channel: tabular features
@@ -167,8 +181,6 @@ PPG_CSV_COLUMN = {
     'Hb_PPG': ('660nm', '730nm', '850nm', '940nm'),
 }
 DEFAULT_PPG_CSV_COLUMN = None
-DEFAULT_PPG_SQA_THRESHOLD = None
-PPG_SQA_WINDOW_SECONDS = 6.0
 
 # Drop glucose targets outside this quantile range (mmol/L).
 TARGET_OUTLIER_LOWER_Q = 0
@@ -256,6 +268,10 @@ def ppg_best_segment_seconds(dataset: str):
 
 def ppg_sqa_threshold(dataset: str):
     return PPG_SQA_THRESHOLD.get(resolve_config_dataset(dataset), DEFAULT_PPG_SQA_THRESHOLD)
+
+
+def ppg_sqa_method(dataset: str) -> str:
+    return PPG_SQA_METHOD.get(resolve_config_dataset(dataset), DEFAULT_PPG_SQA_METHOD)
 
 
 def normalize_ppg_csv_column(
