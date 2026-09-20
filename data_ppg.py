@@ -312,6 +312,58 @@ def ppg_ssqi(signal: np.ndarray) -> float:
     return float(np.mean(centered ** 3))
 
 
+def ppg_kurtosis(signal: np.ndarray) -> float:
+    """Pearson kurtosis (4th standardized moment). Higher often flags spikes/artifacts."""
+    values = np.asarray(signal, dtype=float).reshape(-1)
+    if values.size < 8:
+        return 0.0
+    mean = float(np.mean(values))
+    std = float(np.std(values))
+    if std < 1e-12:
+        return 0.0
+    centered = (values - mean) / std
+    return float(np.mean(centered ** 4))
+
+
+def ppg_ksqi(signal: np.ndarray) -> float:
+    """Kurtosis SQI with higher=better (Elgendi KSQI, inverted for ranking).
+
+    Empirically on IPS/VitalDB, clean windows sit near kurtosis ~2–3; heavy tails
+    (spikes) push kurtosis up. Score = 1/(1+kurtosis) so high kurtosis ranks worse.
+    """
+    kurt = ppg_kurtosis(signal)
+    if kurt <= 0.0:
+        return 0.0
+    return float(1.0 / (1.0 + kurt))
+
+
+# Reject spike-like windows when gating skew / template with kurtosis.
+PPG_KURTOSIS_MAX = 5.0
+
+
+def ppg_skew_kurt_sqi(
+    signal: np.ndarray,
+    kurtosis_max: float = PPG_KURTOSIS_MAX,
+) -> float:
+    """Skewness SSQI, zeroed when kurtosis exceeds the spike ceiling."""
+    skew = ppg_ssqi(signal)
+    if ppg_kurtosis(signal) > float(kurtosis_max):
+        return 0.0
+    return skew
+
+
+def ppg_template_kurt_sqi(
+    signal: np.ndarray,
+    fs: float,
+    kurtosis_max: float = PPG_KURTOSIS_MAX,
+) -> float:
+    """Template cosine SQI, zeroed when kurtosis exceeds the spike ceiling."""
+    score = ppg_template_sqi(signal, fs)
+    if ppg_kurtosis(signal) > float(kurtosis_max):
+        return 0.0
+    return score
+
+
 def _ppg_peak_indices(signal: np.ndarray, fs: float) -> np.ndarray:
     """Systolic-peak sample indices on a lightly band-passed copy; empty on failure."""
     values = np.asarray(signal, dtype=float).reshape(-1)
@@ -389,13 +441,30 @@ def ppg_quality_score(
     fs: float,
     method: str = 'template',
 ) -> float:
-    """Dispatch SQA score: 'template' (cosine-to-mean-pulse) or 'ssqi' (skewness)."""
+    """Dispatch SQA score.
+
+    Methods:
+      template      — cosine to mean-pulse template
+      ssqi          — skewness
+      ksqi          — Pearson kurtosis
+      skew_kurt     — skewness gated by kurtosis >= 3
+      template_kurt — template gated by kurtosis >= 3
+    """
     name = str(method).strip().lower()
     if name in ('template', 'template_sqi', 'tsqi'):
         return ppg_template_sqi(signal, fs)
     if name in ('ssqi', 'skew', 'skewness'):
         return ppg_ssqi(signal)
-    raise ValueError(f'Unknown PPG SQA method {method!r} (expected template|ssqi)')
+    if name in ('ksqi', 'kurt', 'kurtosis'):
+        return ppg_ksqi(signal)
+    if name in ('skew_kurt', 'ssqi_kurt', 'skewness_kurtosis'):
+        return ppg_skew_kurt_sqi(signal)
+    if name in ('template_kurt', 'template_ksqi', 'tsqi_kurt'):
+        return ppg_template_kurt_sqi(signal, fs)
+    raise ValueError(
+        f'Unknown PPG SQA method {method!r} '
+        f'(expected template|ssqi|ksqi|skew_kurt|template_kurt)'
+    )
 
 
 def select_best_segment(
@@ -976,7 +1045,11 @@ def _quality_features(signal: np.ndarray, prefix: str, fs: float) -> dict:
 
     return {
         f'{prefix}ppg_ssqi': ppg_ssqi(values),
+        f'{prefix}ppg_kurtosis': ppg_kurtosis(values),
+        f'{prefix}ppg_ksqi': ppg_ksqi(values),
+        f'{prefix}ppg_skew_kurt_sqi': ppg_skew_kurt_sqi(values),
         f'{prefix}ppg_template_sqi': ppg_template_sqi(values, fs),
+        f'{prefix}ppg_template_kurt_sqi': ppg_template_kurt_sqi(values, fs),
         f'{prefix}ppg_peak_regularity': peak_regularity,
         f'{prefix}ppg_noise_ratio': noise_ratio,
         f'{prefix}ppg_accepted_window_fraction': accepted_fraction,

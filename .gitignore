@@ -34,6 +34,7 @@ seg_error_grid.png
 # documents
 papers/
 paper/
+*.xlsx
 
 # TinyML code
 TinyML_code/
