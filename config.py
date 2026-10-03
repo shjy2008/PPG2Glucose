@@ -244,6 +244,32 @@ def ppg_feature_groups(dataset: str) -> tuple[str, ...]:
     return PPG_FEATURE_GROUPS.get(resolve_config_dataset(dataset), DEFAULT_PPG_FEATURE_GROUPS)
 
 
+# Explicit demo×PPG products for CatBoost (trees don't form products freely).
+# Ablation: MUST MAE 0.708→0.696 / R2 -0.000→+0.052; IPS got worse — MUST only.
+USE_INTERACTION_FEATURES = {
+    'MUST': True,
+    'IPS': False,
+    'vitaldb': False,
+    'Hb_PPG': False,
+}
+DEFAULT_USE_INTERACTION_FEATURES = False
+INTERACTION_FEATURE_PAIRS = (
+    ('age', 'g3_ppg_ibi_mean'),
+    ('age', 'g3_ppg_ibi_std'),
+    ('age', 'g4_ppg_spectral_entropy'),
+    ('age', 'g4_ppg_band_power_low'),
+    ('age', 'weight'),
+    ('weight', 'g3_ppg_perfusion_index'),
+    ('weight', 'g3_ppg_peak_amp_mean'),
+)
+
+
+def use_interaction_features(dataset: str) -> bool:
+    return USE_INTERACTION_FEATURES.get(
+        resolve_config_dataset(dataset), DEFAULT_USE_INTERACTION_FEATURES
+    )
+
+
 def ppg_trim_fractions(dataset: str) -> tuple[float, float]:
     return PPG_TRIM_FRACTIONS.get(resolve_config_dataset(dataset), DEFAULT_PPG_TRIM_FRACTIONS)
 

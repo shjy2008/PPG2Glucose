@@ -154,6 +154,7 @@ def main():
         ppg_target_fs,
         resolve_config_dataset,
         resolve_ppg_center_window_seconds,
+        use_interaction_features,
     )
     from data_loader import resolve_dataset_root
 
@@ -253,6 +254,12 @@ def main():
             X = X.drop(columns=extra)
             feature_names = [name for name in feature_names if name not in extra]
             print(f'Glucose inputs: dropped non-BASIC demos {extra}')
+
+    if use_interaction_features(args.dataset) and not args.only_basic:
+        X, added = utils.add_interaction_features(X)
+        if added:
+            feature_names = list(feature_names) + added
+            print(f'Added {len(added)} interaction features: {added}')
 
     print(
         f"Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}, "

@@ -8,9 +8,34 @@ from sklearn.model_selection import GroupKFold, KFold
 from sklearn.preprocessing import StandardScaler
 
 import evaluation
-from config import DEFAULT_SEEDS, TARGET_OUTLIER_LOWER_Q, TARGET_OUTLIER_UPPER_Q
+from config import (
+    DEFAULT_SEEDS,
+    INTERACTION_FEATURE_PAIRS,
+    TARGET_OUTLIER_LOWER_Q,
+    TARGET_OUTLIER_UPPER_Q,
+)
 
 MG_DL_TO_MMOL_L = 1.0 / 18.0
+
+
+def add_interaction_features(
+    X: pd.DataFrame,
+    pairs: Sequence[tuple[str, str]] = INTERACTION_FEATURE_PAIRS,
+) -> tuple[pd.DataFrame, list[str]]:
+    """Add product columns ``x_{a}_x_{b}`` when both parents exist."""
+    out = X
+    added: list[str] = []
+    for a, b in pairs:
+        if a not in X.columns or b not in X.columns:
+            continue
+        name = f'x_{a}_x_{b}'
+        if name in out.columns:
+            continue
+        if out is X:
+            out = X.copy()
+        out[name] = out[a].to_numpy(dtype=float) * out[b].to_numpy(dtype=float)
+        added.append(name)
+    return out, added
 
 
 def mg_dl_to_mmol_l(value: float) -> float:
