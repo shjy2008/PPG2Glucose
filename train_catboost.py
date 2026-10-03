@@ -100,6 +100,14 @@ def build_parser():
         metavar='N',
         help='Keep top N features per fold (ranked on train split only)',
     )
+    p.add_argument(
+        '--consensus-top',
+        type=int,
+        default=None,
+        metavar='N',
+        help='Keep fixed consensus top-N features (avg rank across IPS/MUST/VitalDB; '
+             'see consensus_top_features.py). Not the same as --select-top.',
+    )
     p.add_argument('--top', type=int, default=20, help='Number of top features to print')
     p.add_argument(
         '--refresh-cache',
@@ -260,6 +268,20 @@ def main():
         if added:
             feature_names = list(feature_names) + added
             print(f'Added {len(added)} interaction features: {added}')
+
+    if args.consensus_top is not None:
+        from consensus_top_features import RANKINGS, consensus
+
+        wanted = [row['feature'] for row in consensus(RANKINGS, top=args.consensus_top)]
+        keep = [name for name in wanted if name in X.columns]
+        missing = [name for name in wanted if name not in X.columns]
+        if missing:
+            print(f'--consensus-top: missing {len(missing)} features (skipped): {missing}')
+        if not keep:
+            raise SystemExit('--consensus-top: none of the consensus features are in X')
+        X = X[keep]
+        feature_names = keep
+        print(f'Using fixed consensus top {args.consensus_top}: {len(keep)} features')
 
     print(
         f"Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}, "

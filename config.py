@@ -38,7 +38,7 @@ DEFAULT_VITALDB_PPG_SECONDS = 60.0
 BASIC_FEATURE_KEYS = {
     'IPS': ('age', 'height', 'weight', 'bmi'),
     # MUST glucose+demo baseline: age+weight only (depth=4 → MAE 0.7075, R2 +0.0003).
-    'MUST': ('age', 'weight'),
+    'MUST': ('age', 'weight'), #('age', 'height', 'weight', 'bmi'),
     'vitaldb': ('age', 'height', 'weight', 'bmi'),
     # Height/weight missing for 77/217 glucose-labeled subjects (marked "/").
     'Hb_PPG': ('age', 'height', 'weight', 'bmi'),
@@ -87,12 +87,32 @@ PPG_FEATURE_GROUPS = {
         'g4',
         'g5',
         'g6',
-        'g8',
+        # 'g8',
         ),
+    # 'MUST': DEFAULT_PPG_FEATURE_GROUPS,
     'IPS': DEFAULT_PPG_FEATURE_GROUPS,
     'vitaldb': DEFAULT_PPG_FEATURE_GROUPS,
     'Hb_PPG': DEFAULT_PPG_FEATURE_GROUPS,
 }
+
+# Explicit demo×PPG products for CatBoost (trees don't form products freely).
+# Ablation: MUST MAE 0.708→0.696 / R2 -0.000→+0.052; IPS got worse — MUST only.
+USE_INTERACTION_FEATURES = {
+    'MUST': False,
+    'IPS': False,
+    'vitaldb': False,
+    'Hb_PPG': False,
+}
+DEFAULT_USE_INTERACTION_FEATURES = False
+INTERACTION_FEATURE_PAIRS = (
+    ('age', 'g3_ppg_ibi_mean'),
+    ('age', 'g3_ppg_ibi_std'),
+    ('age', 'g4_ppg_spectral_entropy'),
+    ('age', 'g4_ppg_band_power_low'),
+    ('age', 'weight'),
+    ('weight', 'g3_ppg_perfusion_index'),
+    ('weight', 'g3_ppg_peak_amp_mean'),
+)
 
 # 0 = full signal (one sample). >0 = non-overlapping windows in seconds.
 DEFAULT_WINDOW_SECONDS = 0.0
@@ -245,26 +265,6 @@ def ppg_sampling_rate(dataset: str) -> float:
 
 def ppg_feature_groups(dataset: str) -> tuple[str, ...]:
     return PPG_FEATURE_GROUPS.get(resolve_config_dataset(dataset), DEFAULT_PPG_FEATURE_GROUPS)
-
-
-# Explicit demo×PPG products for CatBoost (trees don't form products freely).
-# Ablation: MUST MAE 0.708→0.696 / R2 -0.000→+0.052; IPS got worse — MUST only.
-USE_INTERACTION_FEATURES = {
-    'MUST': True,
-    'IPS': False,
-    'vitaldb': False,
-    'Hb_PPG': False,
-}
-DEFAULT_USE_INTERACTION_FEATURES = False
-INTERACTION_FEATURE_PAIRS = (
-    ('age', 'g3_ppg_ibi_mean'),
-    ('age', 'g3_ppg_ibi_std'),
-    ('age', 'g4_ppg_spectral_entropy'),
-    ('age', 'g4_ppg_band_power_low'),
-    ('age', 'weight'),
-    ('weight', 'g3_ppg_perfusion_index'),
-    ('weight', 'g3_ppg_peak_amp_mean'),
-)
 
 
 def use_interaction_features(dataset: str) -> bool:
