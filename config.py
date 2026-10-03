@@ -74,10 +74,12 @@ DEFAULT_PPG_TARGET_FS = None
 
 # Hand-crafted PPG feature groups enabled per dataset.
 # g1=distribution, g2=derivatives, g3=pulse, g4=frequency,
-# g5=periodicity, g6=signal segments, g7=optional signal-quality indicators.
+# g5=periodicity, g6=signal segments, g7=optional signal-quality indicators,
+# g8=EMD/IMF energy stats (MUST-only; IPS ablation hurt).
 DEFAULT_PPG_FEATURE_GROUPS = ('g1', 'g2', 'g3', 'g4', 'g5', 'g6')
 PPG_FEATURE_GROUPS = {
     # MUST ablation: g3-g6 best among group sets; age+weight demo improves further.
+    # g8 EMD: MAE 0.708→0.704, R2 -0.000→+0.032 (IPS worse — not enabled there).
     'MUST': (
         # 'g1',
         # 'g2',
@@ -85,6 +87,7 @@ PPG_FEATURE_GROUPS = {
         'g4',
         'g5',
         'g6',
+        'g8',
         ),
     'IPS': DEFAULT_PPG_FEATURE_GROUPS,
     'vitaldb': DEFAULT_PPG_FEATURE_GROUPS,

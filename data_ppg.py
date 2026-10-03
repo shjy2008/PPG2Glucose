@@ -853,6 +853,75 @@ def _pulse_features(signal: np.ndarray, prefix: str) -> dict:
     }
 
 
+def _emd_features(signal: np.ndarray, prefix: str, fs: float) -> dict:
+    """EMD / IMF energy fractions and simple IMF1 stats (literature-style ablation)."""
+    empty = {
+        f'{prefix}ppg_emd_energy_imf1': 0.0,
+        f'{prefix}ppg_emd_energy_imf2': 0.0,
+        f'{prefix}ppg_emd_energy_imf3': 0.0,
+        f'{prefix}ppg_emd_energy_resid': 0.0,
+        f'{prefix}ppg_emd_energy_entropy': 0.0,
+        f'{prefix}ppg_emd_imf1_std': 0.0,
+    }
+    values = np.asarray(signal, dtype=float).reshape(-1)
+    if values.size < 32 or fs <= 0:
+        return empty
+
+    # Downsample / truncate so EMD stays tractable on high-fs MUST.
+    target_fs = 100.0
+    x = values - float(np.mean(values))
+    fs_eff = float(fs)
+    if fs_eff > target_fs * 1.5:
+        step = max(1, int(round(fs_eff / target_fs)))
+        x = x[::step]
+        fs_eff = fs_eff / step
+    max_samples = int(round(20.0 * fs_eff))  # ≤20 s
+    if x.size > max_samples:
+        start = (x.size - max_samples) // 2
+        x = x[start : start + max_samples]
+    if x.size < 32:
+        return empty
+
+    try:
+        from PyEMD import EMD
+
+        emd = EMD(max_imf=4)
+        imfs = np.asarray(emd.emd(x, max_imf=4), dtype=float)
+    except Exception:
+        return empty
+    if imfs.ndim != 2 or imfs.shape[0] < 1:
+        return empty
+
+    # Last row is often the residue when EMD returns IMFs+residue.
+    energies = np.sum(imfs ** 2, axis=1)
+    total = float(np.sum(energies))
+    if total <= 1e-12:
+        return empty
+    frac = energies / total
+    n = int(frac.size)
+    # Treat final component as residue when multiple rows are returned.
+    if n == 1:
+        e1, e2, e3, eres = float(frac[0]), 0.0, 0.0, 0.0
+    elif n == 2:
+        e1, e2, e3, eres = float(frac[0]), 0.0, 0.0, float(frac[1])
+    elif n == 3:
+        e1, e2, e3, eres = float(frac[0]), float(frac[1]), 0.0, float(frac[2])
+    else:
+        e1, e2, e3, eres = float(frac[0]), float(frac[1]), float(frac[2]), float(np.sum(frac[3:]))
+
+    pos = frac[frac > 1e-12]
+    entropy = float(-np.sum(pos * np.log(pos)))
+    imf1_std = float(np.std(imfs[0]))
+    return {
+        f'{prefix}ppg_emd_energy_imf1': e1,
+        f'{prefix}ppg_emd_energy_imf2': e2,
+        f'{prefix}ppg_emd_energy_imf3': e3,
+        f'{prefix}ppg_emd_energy_resid': eres,
+        f'{prefix}ppg_emd_energy_entropy': entropy,
+        f'{prefix}ppg_emd_imf1_std': imf1_std,
+    }
+
+
 def _frequency_domain_features(signal: np.ndarray, prefix: str, fs: float) -> dict:
     if signal.size < 16:
         return {
@@ -1068,7 +1137,7 @@ def extract_ppg_features(
         raise ValueError('empty signal')
 
     enabled = set(feature_groups)
-    unknown = enabled.difference({'g1', 'g2', 'g3', 'g4', 'g5', 'g6', 'g7'})
+    unknown = enabled.difference({'g1', 'g2', 'g3', 'g4', 'g5', 'g6', 'g7', 'g8'})
     if unknown:
         raise ValueError(f'Unknown PPG feature groups: {sorted(unknown)}')
 
@@ -1087,6 +1156,8 @@ def extract_ppg_features(
         features.update(_segment_features(signal, prefix='g6_'))
     if 'g7' in enabled:
         features.update(_quality_features(signal, prefix='g7_', fs=fs))
+    if 'g8' in enabled:
+        features.update(_emd_features(signal, prefix='g8_', fs=fs))
     return features
 
 
