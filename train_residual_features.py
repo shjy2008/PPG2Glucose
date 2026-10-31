@@ -44,15 +44,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=','.join(str(seed) for seed in DEFAULT_SEEDS),
         help='Comma-separated CV seeds. Default matches train_catboost.py.',
     )
-    parser.add_argument('--epochs', type=int, default=12)
+    parser.add_argument('--epochs', type=int, default=30)
     parser.add_argument('--batch-size', type=int, default=64)
     parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--embed-dim', type=int, default=4)
+    parser.add_argument('--embed-dim', type=int, default=32)
     parser.add_argument(
         '--wave-length',
         type=int,
-        default=512,
-        help='Temporal length of the waveform seen by the feature network.',
+        default=0,
+        help='Length the feature network sees. 0 keeps the loaded waveform.',
     )
     parser.add_argument(
         '--corr-weight',
@@ -64,21 +64,39 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+class _ResBlock(nn.Module):
+    def __init__(self, in_channels: int, out_channels: int, stride: int):
+        super().__init__()
+        self.conv = nn.Sequential(
+            nn.Conv1d(in_channels, out_channels, 7, stride=stride, padding=3, bias=False),
+            nn.GroupNorm(8, out_channels),
+            nn.ReLU(inplace=True),
+            nn.Conv1d(out_channels, out_channels, 5, padding=2, bias=False),
+            nn.GroupNorm(8, out_channels),
+        )
+        if in_channels == out_channels and stride == 1:
+            self.skip = nn.Identity()
+        else:
+            self.skip = nn.Conv1d(in_channels, out_channels, 1, stride=stride, bias=False)
+        self.out = nn.ReLU(inplace=True)
+
+    def forward(self, waveforms: torch.Tensor) -> torch.Tensor:
+        return self.out(self.conv(waveforms) + self.skip(waveforms))
+
+
 class ResidualFeatureNet(nn.Module):
-    """Map a waveform to a few features, with a linear head for the residual."""
+    """Map a waveform to features, with a linear head for the residual."""
 
     def __init__(self, n_features: int, in_channels: int = 1):
         super().__init__()
         self.conv = nn.Sequential(
-            nn.Conv1d(in_channels, 16, kernel_size=9, stride=2, padding=4),
-            nn.ReLU(),
-            nn.Conv1d(16, 32, kernel_size=7, stride=2, padding=3),
-            nn.ReLU(),
-            nn.Conv1d(32, 32, kernel_size=5, stride=2, padding=2),
-            nn.ReLU(),
+            _ResBlock(in_channels, 32, stride=1),
+            _ResBlock(32, 64, stride=2),
+            _ResBlock(64, 128, stride=2),
+            _ResBlock(128, 128, stride=1),
             nn.AdaptiveAvgPool1d(1),
         )
-        self.proj = nn.Linear(32, n_features)
+        self.proj = nn.Linear(128, n_features)
         self.head = nn.Linear(n_features, 1)
 
     def embed(self, waveforms: torch.Tensor) -> torch.Tensor:
@@ -126,7 +144,7 @@ def _parse_seeds(raw: str) -> tuple[int, ...]:
 def _downsample(signals: np.ndarray, length: int) -> np.ndarray:
     values = np.asarray(signals, dtype=np.float32)
     source = values.shape[-1]
-    if source == length:
+    if length <= 0 or source == length:
         return values
     if source < 2:
         raise ValueError(f'waveform length {source} is too short to downsample')
