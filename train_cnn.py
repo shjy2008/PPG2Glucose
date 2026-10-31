@@ -4,15 +4,16 @@ from typing import Optional
 import numpy as np
 import torch
 from torch import nn
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader
 
 import data_loader
 import utils
-from config import tensor_to_numpy, torch_device, torch_float_tensor
+from config import tensor_to_numpy, torch_device
 from waveform_train import (
-    as_nct,
+    make_signal_loader,
     normalize_signals_per_sample,
     normalize_targets,
+    set_seed,
     standardize_train_test,
     waveform_length,
     waveform_n_channels,
@@ -31,6 +32,17 @@ def build_parser():
     p.add_argument('--weight-decay', type=float, default=1e-4)
     p.add_argument('--signal-length', type=int, default=0, help='0 = median waveform length')
     p.add_argument(
+        '--window-seconds',
+        type=float,
+        default=0.0,
+        help='Non-overlapping windows before the split. 0 keeps the whole recording (LSPO).',
+    )
+    p.add_argument(
+        '--sample-wise',
+        action='store_true',
+        help='KFold over rows, so the same subject can sit in train and test (RTTS).',
+    )
+    p.add_argument(
         '--include-basic',
         dest='include_basic',
         action='store_true',
@@ -39,6 +51,13 @@ def build_parser():
     p.add_argument('--no-basic', dest='include_basic', action='store_false')
     p.set_defaults(include_basic=False)
     return p
+
+
+class _GlobalMean(nn.Module):
+    """Mean over time. Same output as AdaptiveAvgPool1d(1), deterministic on GPU."""
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        return inputs.mean(dim=-1, keepdim=True)
 
 
 class PPGCNNRegressor(nn.Module):
@@ -57,7 +76,7 @@ class PPGCNNRegressor(nn.Module):
             nn.Conv1d(32, 64, kernel_size=5, padding=2),
             nn.BatchNorm1d(64),
             nn.ReLU(),
-            nn.AdaptiveAvgPool1d(1),
+            _GlobalMean(),
         )
         self.head = nn.Sequential(
             nn.Flatten(),
@@ -81,19 +100,17 @@ def make_loader(
     y: Optional[np.ndarray],
     batch_size: int,
     shuffle: bool,
+    seed: int,
     demographics: Optional[np.ndarray] = None,
 ) -> DataLoader:
-    tensor_x = torch_float_tensor(as_nct(X))
-    if y is None:
-        dataset = TensorDataset(tensor_x)
-    elif demographics is not None:
-        tensor_d = torch_float_tensor(demographics)
-        tensor_y = torch_float_tensor(y)
-        dataset = TensorDataset(tensor_x, tensor_d, tensor_y)
-    else:
-        tensor_y = torch_float_tensor(y)
-        dataset = TensorDataset(tensor_x, tensor_y)
-    return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle)
+    return make_signal_loader(
+        X,
+        y,
+        batch_size,
+        shuffle,
+        demographics=demographics,
+        seed=seed,
+    )
 
 
 def train_model(
@@ -194,6 +211,7 @@ def run_fold(
     args,
     device: torch.device,
     demographics: Optional[np.ndarray] = None,
+    seed: int = 0,
 ) -> np.ndarray:
     X_train, X_val = X[train_index], X[val_index]
     y_train, y_mean, y_std = normalize_targets(y[train_index])
@@ -208,10 +226,10 @@ def run_fold(
         n_demographics = demo_train.shape[1]
 
     train_loader = make_loader(
-        X_train, y_train, args.batch_size, True, demographics=demo_train
+        X_train, y_train, args.batch_size, True, seed, demographics=demo_train
     )
     val_loader = make_loader(
-        X_val, y_val, args.batch_size, False, demographics=demo_val
+        X_val, y_val, args.batch_size, False, seed, demographics=demo_val
     )
 
     model = PPGCNNRegressor(
@@ -236,18 +254,29 @@ def run_fold(
 
 def main():
     args = build_parser().parse_args()
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
+    set_seed(args.seed)
 
     device = torch_device()
 
-    print(f'Using dataset: {args.dataset}')
+    window_seconds = float(args.window_seconds or 0.0)
+    sample_wise = bool(args.sample_wise)
+    if sample_wise and window_seconds <= 0:
+        protocol = 'row-wise KFold'
+    elif sample_wise:
+        protocol = 'RTTS'
+    elif window_seconds > 0:
+        protocol = 'STTS'
+    else:
+        protocol = 'LSPO'
+    print(f'Using dataset: {args.dataset} ({protocol})')
     signals, demographics, y, groups = data_loader.load_waveform_dataset(
         dataset=args.dataset,
         signal_length=args.signal_length,
         include_basic=args.include_basic,
+        resample=args.signal_length > 0 or window_seconds > 0,
         max_samples=args.max_samples,
         return_groups=True,
+        window_seconds=window_seconds,
     )
     X = normalize_signals_per_sample(signals)
     print(
@@ -255,13 +284,16 @@ def main():
         f'waveform_length: {waveform_length(signals)}, '
         f'channels: {waveform_n_channels(signals)}, input_length: {waveform_length(X)}'
     )
-    print(f'Subject-wise CV (LSPO): {len(np.unique(groups))} unique subjects')
+    cv_groups = None if sample_wise else groups
+    if cv_groups is None:
+        print(f'Row-wise CV: {len(y)} rows, {len(np.unique(groups))} subjects')
+    else:
+        print(f'Subject-wise CV ({protocol}): {len(np.unique(groups))} unique subjects')
 
     def predict_fold(train_index: np.ndarray, val_index: np.ndarray, seed: int) -> np.ndarray:
-        torch.manual_seed(seed)
-        np.random.seed(seed)
+        set_seed(seed)
         return run_fold(
-            X, y, train_index, val_index, args, device, demographics=demographics
+            X, y, train_index, val_index, args, device, demographics=demographics, seed=seed
         )
 
     utils.run_repeated_kfold_array_cv(
@@ -269,7 +301,7 @@ def main():
         predict_fold,
         model_name='cnn',
         n_splits=args.n_splits,
-        groups=groups,
+        groups=cv_groups,
     )
 
 
