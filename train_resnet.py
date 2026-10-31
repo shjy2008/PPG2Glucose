@@ -15,6 +15,7 @@ from config import (
     torch_device,
 )
 from TinyML_code.resnet import resnet34
+from data_loader import add_prediction_label_argument, needs_demographics, retarget_waveform_arrays
 from waveform_train import (
     make_signal_loader,
     normalize_signals_per_sample,
@@ -22,6 +23,8 @@ from waveform_train import (
     set_seed,
     split_train_val,
     standardize_train_test,
+    waveform_length,
+    waveform_n_channels,
 )
 
 
@@ -75,6 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
         help='Concatenate overlapping demographics (default: PPG only)',
     )
     parser.add_argument('--no-basic', dest='include_basic', action='store_false')
+    add_prediction_label_argument(parser)
     parser.add_argument(
         '--quick',
         action='store_true',
@@ -92,10 +96,10 @@ def apply_quick_settings(args) -> None:
 
 
 class ResNetRegressor(nn.Module):
-    def __init__(self, n_demographics: int = 0):
+    def __init__(self, n_demographics: int = 0, in_channel: int = 1):
         super().__init__()
         self.n_demographics = n_demographics
-        self.backbone = resnet34(in_channel=1)
+        self.backbone = resnet34(in_channel=in_channel)
         self.backbone.fc2 = nn.Identity()
         self.output = nn.Linear(128 + n_demographics, 1)
 
@@ -297,7 +301,10 @@ def run_fold(
     )
 
     n_demographics = train_demographics.shape[1] if use_basic else 0
-    model = ResNetRegressor(n_demographics=n_demographics).to(device)
+    model = ResNetRegressor(
+        n_demographics=n_demographics,
+        in_channel=waveform_n_channels(train_signals),
+    ).to(device)
     train_model(model, train_loader, val_loader, args, device, use_basic)
     return predict(
         model,
@@ -343,7 +350,7 @@ def main() -> None:
     signals, demographics, targets, groups, sessions = data_loader.load_waveform_dataset(
         dataset=args.dataset,
         signal_length=args.signal_length,
-        include_basic=args.include_basic,
+        include_basic=needs_demographics(args.include_basic, args.label),
         resample=True,
         max_samples=args.max_samples,
         return_groups=True,
@@ -351,11 +358,31 @@ def main() -> None:
         ppg_seconds=ppg_seconds,
         window_seconds=window_seconds,
     )
+    (
+        signals,
+        demographics,
+        targets,
+        groups,
+        sessions,
+        label,
+        y_unit,
+        plot_clarke,
+    ) = retarget_waveform_arrays(
+        signals,
+        demographics,
+        targets,
+        groups,
+        sessions,
+        dataset=args.dataset,
+        label=args.label,
+        keep_demo=args.include_basic,
+    )
     signals = normalize_signals_per_sample(signals)
     basic_mode = 'with basic info' if args.include_basic and demographics.size else 'PPG only'
     print(
         f'Training ResNet-34 on {device.type}: {len(targets)} samples, '
-        f'signal length {signals.shape[1]} ({basic_mode})'
+        f'signal length {waveform_length(signals)}, '
+        f'{waveform_n_channels(signals)} channel(s) ({basic_mode}, label={label})'
     )
 
     mode = utils.exclusive_split_mode(sample_wise=args.sample_wise, pas=args.pas)
@@ -400,6 +427,8 @@ def main() -> None:
         seeds=seeds,
         groups=cv_groups,
         sessions=cv_sessions,
+        y_unit=y_unit,
+        plot_clarke=plot_clarke,
     )
 
 

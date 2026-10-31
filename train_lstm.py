@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader, TensorDataset
 import data_loader
 import utils
 from config import torch_device
+from waveform_train import as_nct, waveform_length, waveform_n_channels
 
 
 def build_parser():
@@ -53,8 +54,8 @@ def apply_quick_settings(args) -> None:
 
 
 def normalize_signals_per_sample(signals: np.ndarray) -> np.ndarray:
-    mean = signals.mean(axis=1, keepdims=True)
-    std = signals.std(axis=1, keepdims=True)
+    mean = signals.mean(axis=-1, keepdims=True)
+    std = signals.std(axis=-1, keepdims=True)
     std = np.where(std == 0, 1.0, std)
     return ((signals - mean) / std).astype(np.float32, copy=False)
 
@@ -86,12 +87,13 @@ class PPGLSTMRegressor(nn.Module):
         bidirectional: bool,
         include_basic: bool,
         n_basic: int,
+        input_size: int = 1,
     ):
         super().__init__()
         self.include_basic = include_basic
         self.bidirectional = bidirectional
         self.lstm = nn.LSTM(
-            input_size=1,
+            input_size=input_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
             batch_first=True,
@@ -122,7 +124,8 @@ def make_loader(
     shuffle: bool,
     include_basic: bool,
 ) -> DataLoader:
-    tensor_x = torch.from_numpy(signals).float().unsqueeze(-1)
+    nct = as_nct(signals)
+    tensor_x = torch.from_numpy(np.transpose(nct, (0, 2, 1))).float()
     if include_basic and demographics.size:
         tensor_d = torch.from_numpy(demographics).float()
         if y is None:
@@ -263,6 +266,7 @@ def run_fold(
         bidirectional=args.bidirectional,
         include_basic=args.include_basic,
         n_basic=n_basic,
+        input_size=waveform_n_channels(sig_train),
     ).to(device)
     train_model(
         model,
@@ -307,7 +311,8 @@ def main():
         )
     print(
         f'Data for training - X.size: {signals.shape[0]}, y.size: {y.shape[0]}, '
-        f'waveform_length: {signals.shape[1]}, model: {model_type} ({basic_mode})'
+        f'waveform_length: {waveform_length(signals)}, '
+        f'channels: {waveform_n_channels(signals)}, model: {model_type} ({basic_mode})'
     )
 
     def predict_fold(train_index: np.ndarray, val_index: np.ndarray, seed: int) -> np.ndarray:

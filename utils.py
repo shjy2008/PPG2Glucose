@@ -5,11 +5,37 @@ from typing import Callable, Dict, Mapping, Optional, Sequence, Tuple, Union
 
 from sklearn.impute import SimpleImputer
 from sklearn.model_selection import GroupKFold, KFold
+from sklearn.preprocessing import StandardScaler
 
 import evaluation
-from config import DEFAULT_SEEDS, TARGET_OUTLIER_LOWER_Q, TARGET_OUTLIER_UPPER_Q
+from config import (
+    DEFAULT_SEEDS,
+    INTERACTION_FEATURE_PAIRS,
+    TARGET_OUTLIER_LOWER_Q,
+    TARGET_OUTLIER_UPPER_Q,
+)
 
 MG_DL_TO_MMOL_L = 1.0 / 18.0
+
+
+def add_interaction_features(
+    X: pd.DataFrame,
+    pairs: Sequence[tuple[str, str]] = INTERACTION_FEATURE_PAIRS,
+) -> tuple[pd.DataFrame, list[str]]:
+    """Add product columns ``x_{a}_x_{b}`` when both parents exist."""
+    out = X
+    added: list[str] = []
+    for a, b in pairs:
+        if a not in X.columns or b not in X.columns:
+            continue
+        name = f'x_{a}_x_{b}'
+        if name in out.columns:
+            continue
+        if out is X:
+            out = X.copy()
+        out[name] = out[a].to_numpy(dtype=float) * out[b].to_numpy(dtype=float)
+        added.append(name)
+    return out, added
 
 
 def mg_dl_to_mmol_l(value: float) -> float:
@@ -77,17 +103,29 @@ def _impute_features(
     X_train: pd.DataFrame,
     X_other: pd.DataFrame,
     imputer: Optional[SimpleImputer] = None,
-) -> tuple[pd.DataFrame, pd.DataFrame, SimpleImputer]:
+    scaler: Optional[StandardScaler] = None,
+    *,
+    scale: bool = True,
+) -> tuple[pd.DataFrame, pd.DataFrame, tuple[SimpleImputer, Optional[StandardScaler]]]:
+    """Median-impute, then optionally z-score features (fit on train only)."""
     if imputer is None:
         imputer = SimpleImputer(strategy='median')
         train_values = imputer.fit_transform(X_train)
     else:
         train_values = imputer.transform(X_train)
 
-    X_train_imputed = pd.DataFrame(train_values, columns=X_train.columns, index=X_train.index)
     other_values = imputer.transform(X_other)
-    X_other_imputed = pd.DataFrame(other_values, columns=X_other.columns, index=X_other.index)
-    return X_train_imputed, X_other_imputed, imputer
+    if scale:
+        if scaler is None:
+            scaler = StandardScaler()
+            train_values = scaler.fit_transform(train_values)
+        else:
+            train_values = scaler.transform(train_values)
+        other_values = scaler.transform(other_values)
+
+    X_train_proc = pd.DataFrame(train_values, columns=X_train.columns, index=X_train.index)
+    X_other_proc = pd.DataFrame(other_values, columns=X_other.columns, index=X_other.index)
+    return X_train_proc, X_other_proc, (imputer, scaler)
 
 
 def _normalized_feature_importances(model) -> Optional[np.ndarray]:
@@ -252,12 +290,20 @@ def _run_repeated_kfold_cv(
     seeds: Optional[Sequence[int]] = None,
     groups: Optional[np.ndarray] = None,
     sessions: Optional[np.ndarray] = None,
+    eval_groups: Optional[np.ndarray] = None,
     verbose: bool = True,
     fold_log: Optional[Callable[[Dict[str, dict]], str]] = None,
+    y_unit: str = 'mmol/L',
 ) -> Tuple[Dict[str, list[dict]], Dict[str, np.ndarray]]:
     y = np.asarray(y, dtype=float).reshape(-1)
     if seeds is None:
         seeds = DEFAULT_SEEDS
+    if eval_groups is not None:
+        eval_groups = np.asarray(eval_groups)
+        if len(eval_groups) != len(y):
+            raise ValueError(
+                f'eval_groups length ({len(eval_groups)}) must match y ({len(y)})'
+            )
 
     fold_metrics = {name: [] for name in model_names}
     oof_sum = {name: np.zeros(len(y), dtype=float) for name in model_names}
@@ -271,6 +317,8 @@ def _run_repeated_kfold_cv(
                 mode = 'GroupKFold (subject-wise)'
             else:
                 mode = 'KFold'
+            if eval_groups is not None:
+                mode = f'{mode}; eval pooled by group'
             print(f'--- Seed {seed} ({seed_index}/{len(seeds)}) [{mode}] ---')
 
         for fold_index, (train_index, val_index) in enumerate(
@@ -281,7 +329,13 @@ def _run_repeated_kfold_cv(
             metrics_by_model = {}
             for name in model_names:
                 predictions = predictions_by_model[name]
-                metrics = evaluation.evaluate_regression(y[val_index], predictions)
+                if eval_groups is None:
+                    metrics = evaluation.evaluate_regression(y[val_index], predictions)
+                else:
+                    y_agg, pred_agg = evaluation.aggregate_by_group(
+                        y[val_index], predictions, eval_groups[val_index]
+                    )
+                    metrics = evaluation.evaluate_regression(y_agg, pred_agg)
                 fold_metrics[name].append(metrics)
                 oof_sum[name][val_index] += predictions
                 oof_count[name][val_index] += 1.0
@@ -293,8 +347,8 @@ def _run_repeated_kfold_cv(
                     fold_log(metrics_by_model)
                     if fold_log is not None
                     else (
-                        f'RMSE={metrics["rmse"]:.4f} mmol/L '
-                        f'MAE={metrics["mae"]:.4f} mmol/L R2={metrics["r2"]:.4f}'
+                        f'RMSE={metrics["rmse"]:.4f} {y_unit} '
+                        f'MAE={metrics["mae"]:.4f} {y_unit} R2={metrics["r2"]:.4f}'
                     )
                 )
                 print(f'  Fold {fold_index}: {message}')
@@ -319,13 +373,15 @@ def run_repeated_kfold_array_cv(
     sessions: Optional[np.ndarray] = None,
     print_target_distribution: bool = True,
     verbose: bool = True,
+    y_unit: str = 'mmol/L',
+    plot_clarke: bool = True,
 ) -> Tuple[list[dict], pd.DataFrame, np.ndarray]:
     y = np.asarray(y, dtype=float).reshape(-1)
     if seeds is None:
         seeds = DEFAULT_SEEDS
 
     if verbose and print_target_distribution:
-        evaluation.print_cv_intro(y, n_splits, seeds)
+        evaluation.print_cv_intro(y, n_splits, seeds, y_unit=y_unit)
 
     fold_metrics_by_model, oof_by_model = _run_repeated_kfold_cv(
         y,
@@ -338,6 +394,7 @@ def run_repeated_kfold_array_cv(
         groups=groups,
         sessions=sessions,
         verbose=verbose,
+        y_unit=y_unit,
     )
     fold_metrics_by_model, summary_df, oof_predictions = evaluation.report_cv(
         fold_metrics_by_model,
@@ -345,6 +402,8 @@ def run_repeated_kfold_array_cv(
         y,
         plot_model=model_name,
         verbose=verbose,
+        y_unit=y_unit,
+        plot_clarke=plot_clarke,
     )
     return fold_metrics_by_model[model_name], summary_df, oof_predictions
 
@@ -475,15 +534,21 @@ def run_repeated_kfold_training(
     select_top_n: Optional[int] = None,
     groups: Optional[np.ndarray] = None,
     sessions: Optional[np.ndarray] = None,
+    eval_groups: Optional[np.ndarray] = None,
     verbose: bool = True,
     train_filter: Optional[Callable[[pd.DataFrame, pd.Series], np.ndarray]] = None,
     return_fold_metrics: bool = False,
+    y_unit: str = 'mmol/L',
+    plot_clarke: bool = True,
 ) -> Union[Tuple[pd.DataFrame, pd.DataFrame], Tuple[pd.DataFrame, pd.DataFrame, list]]:
     """Repeated k-fold CV.
 
     ``train_filter`` receives the rows of the training fold and returns a boolean
     keep-mask. Validation folds are never filtered, so metrics stay comparable to
     an unfiltered run.
+
+    ``eval_groups`` pools window-level predictions before metrics (e.g. one score
+    per recording = subject+session). Inference still runs on every window.
 
     ``return_fold_metrics`` also returns the per-fold metric dicts, ordered
     seed-major then fold. Splits depend only on y/groups/seed, so runs that differ
@@ -503,8 +568,20 @@ def run_repeated_kfold_training(
         groups = groups[mask]
         if sessions is not None:
             sessions = np.asarray(sessions)[mask]
+        if eval_groups is not None:
+            eval_groups = np.asarray(eval_groups)[mask]
     else:
         X, y = _prepare_xy(X, y)
+        if eval_groups is not None:
+            # _prepare_xy drops NaN targets; align eval_groups the same way.
+            keep = y.index
+            # y was reset; reconstruct from original length is awkward. Require
+            # callers with eval_groups to also pass groups, or pass pre-cleaned y.
+            if len(eval_groups) != len(y):
+                raise ValueError(
+                    'eval_groups must match y after cleaning; pass groups=... '
+                    'or pre-drop NaN targets so lengths align'
+                )
     seeds = DEFAULT_SEEDS
     y_values = y.values
     track_importances = feature_names is not None and len(feature_names) > 0
@@ -531,11 +608,18 @@ def run_repeated_kfold_training(
                 f'Split: GroupKFold by subject_ID '
                 f'({len(np.unique(groups))} unique subjects)'
             )
+        if eval_groups is not None:
+            extras.append(
+                f'Eval pooling: {len(np.unique(eval_groups))} groups '
+                f'(mean window predictions within each group)'
+            )
         if train_filter is not None:
             extras.append('Train-fold filter: enabled (validation folds keep all rows)')
         if use_selection:
             extras.append(f'Feature selection: top {select_top_n} per fold (train-only ranking)')
-        evaluation.print_cv_intro(y_values, n_splits, seeds, extra_lines=extras)
+        evaluation.print_cv_intro(
+            y_values, n_splits, seeds, extra_lines=extras, y_unit=y_unit
+        )
 
     def run_fold(train_index: np.ndarray, val_index: np.ndarray, seed: int) -> Dict[str, np.ndarray]:
         nonlocal accum, selection_counts, importance_runs, n_runs
@@ -592,7 +676,9 @@ def run_repeated_kfold_training(
         seeds=seeds,
         groups=groups,
         sessions=sessions,
+        eval_groups=eval_groups,
         verbose=verbose,
+        y_unit=y_unit,
     )
     _, summary_df, oof_predictions = evaluation.report_cv(
         fold_metrics_by_model,
@@ -600,6 +686,7 @@ def run_repeated_kfold_training(
         y_values,
         plot_model=model_name,
         verbose=False,
+        eval_groups=eval_groups,
     )
 
     if track_importances and importance_runs > 0:
@@ -634,7 +721,18 @@ def run_repeated_kfold_training(
                     index=False,
                 )
             )
-        evaluation.print_cv_results(summary_df, y_values, oof_predictions)
+        y_plot, pred_plot = y_values, oof_predictions
+        if eval_groups is not None and oof_predictions is not None:
+            y_plot, pred_plot = evaluation.aggregate_by_group(
+                y_values, oof_predictions, eval_groups
+            )
+        evaluation.print_cv_results(
+            summary_df,
+            y_plot,
+            pred_plot,
+            y_unit=y_unit,
+            plot_clarke=plot_clarke,
+        )
 
     if return_fold_metrics:
         return summary_df, importance_df, fold_metrics_by_model[model_name]

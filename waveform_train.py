@@ -30,9 +30,32 @@ def set_seed(seed: int) -> None:
         torch.backends.cudnn.benchmark = False
 
 
+def waveform_length(signals: np.ndarray) -> int:
+    return int(np.asarray(signals).shape[-1])
+
+
+def waveform_n_channels(signals: np.ndarray) -> int:
+    arr = np.asarray(signals)
+    if arr.ndim == 2:
+        return 1
+    if arr.ndim == 3:
+        return int(arr.shape[1])
+    raise ValueError(f'Expected (N, T) or (N, C, T) waveforms, got shape {arr.shape}')
+
+
+def as_nct(signals: np.ndarray) -> np.ndarray:
+    """(N, T) → (N, 1, T); (N, C, T) unchanged."""
+    arr = np.asarray(signals, dtype=np.float32)
+    if arr.ndim == 2:
+        return arr[:, None, :]
+    if arr.ndim == 3:
+        return arr
+    raise ValueError(f'Expected (N, T) or (N, C, T) waveforms, got shape {arr.shape}')
+
+
 def normalize_signals_per_sample(signals: np.ndarray) -> np.ndarray:
-    mean = signals.mean(axis=1, keepdims=True)
-    std = signals.std(axis=1, keepdims=True)
+    mean = signals.mean(axis=-1, keepdims=True)
+    std = signals.std(axis=-1, keepdims=True)
     std = np.where(std == 0, 1.0, std)
     return ((signals - mean) / std).astype(np.float32, copy=False)
 
@@ -89,7 +112,7 @@ def make_signal_loader(
     seed: Optional[int] = None,
     drop_last: bool = False,
 ) -> DataLoader:
-    tensors = [torch_float_tensor(signals[:, None, :])]
+    tensors = [torch_float_tensor(as_nct(signals))]
     if demographics is not None and demographics.size:
         tensors.append(torch_float_tensor(demographics))
     if targets is not None:
@@ -135,7 +158,7 @@ def load_waveform_split(
 
 
 def _resize_signals(signals: np.ndarray, length: int) -> np.ndarray:
-    if signals.shape[1] == length:
+    if signals.shape[-1] == length:
         return signals
     return np.stack(
         [data_loader._resize_waveform(row, length, resample=True) for row in signals],
@@ -193,7 +216,15 @@ def prepare_ood_waveforms(
         window_seconds=window_seconds,
         max_samples=max_samples,
     )
-    test_signals = _resize_signals(test_signals, train_signals.shape[1])
+    test_signals = _resize_signals(test_signals, waveform_length(train_signals))
+    train_channels = waveform_n_channels(train_signals)
+    test_channels = waveform_n_channels(test_signals)
+    if train_channels != test_channels:
+        raise ValueError(
+            f'OOD channel mismatch: {train_dataset} has {train_channels} PPG '
+            f'channel(s), {test_dataset} has {test_channels}. Multi-wavelength '
+            'fusion is dataset-specific.'
+        )
     if include_basic:
         train_demo, test_demo, demo_keys = align_ood_demographics(
             train_demo, test_demo, train_dataset, test_dataset
@@ -208,9 +239,9 @@ def prepare_ood_waveforms(
     print(
         f'OOD waveforms: {train_dataset} → {test_dataset}\n'
         f'  train: {len(train_y)} samples, {len(np.unique(train_groups))} subjects, '
-        f'length={train_signals.shape[1]}\n'
+        f'length={waveform_length(train_signals)}, channels={train_channels}\n'
         f'  test:  {len(test_y)} samples, {len(np.unique(test_groups))} subjects, '
-        f'length={test_signals.shape[1]}\n'
+        f'length={waveform_length(test_signals)}, channels={test_channels}\n'
         f'  demographics: {demo_keys if demo_keys else "PPG only"}'
     )
     return (

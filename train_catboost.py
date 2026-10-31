@@ -9,6 +9,7 @@ import data_loader
 import utils
 import numpy as np
 from config import DEFAULT_SEEDS, DEFAULT_WINDOW_SECONDS, catboost_kwargs
+from data_loader import add_prediction_label_argument, retarget_tabular_frame
 
 DEFAULT_PARAMS = {
     # 'iterations': 400,
@@ -43,6 +44,7 @@ DATASET_PARAMS = {
         'depth': 4,
         },
     'vitaldb': {},
+    'Hb_PPG': {'depth': 4},
 }
 
 
@@ -51,7 +53,7 @@ def build_parser():
     p.add_argument(
         '--dataset',
         default='IPS',
-        help='IPS, MUST, vitaldb, or a path',
+        help='IPS, MUST, vitaldb, Hb_PPG, or a path',
     )
     p.add_argument(
         '--ppg-seconds',
@@ -98,12 +100,27 @@ def build_parser():
         metavar='N',
         help='Keep top N features per fold (ranked on train split only)',
     )
+    p.add_argument(
+        '--consensus-top',
+        type=int,
+        default=None,
+        metavar='N',
+        help='Keep fixed consensus top-N features (avg rank across IPS/MUST/VitalDB; '
+             'see consensus_top_features.py). Not the same as --select-top.',
+    )
     p.add_argument('--top', type=int, default=20, help='Number of top features to print')
     p.add_argument(
         '--refresh-cache',
         action='store_true',
+        default=True,
         help='Re-extract PPG features and overwrite the feature cache',
     )
+    p.add_argument(
+        '--only-basic',
+        action='store_true',
+        help='Drop PPG features; train on BASIC_FEATURE_KEYS only (demographics baseline)',
+    )
+    add_prediction_label_argument(p, keep_flag='--only-basic')
     return p
 
 
@@ -136,13 +153,17 @@ def main():
     )
     from config import (
         DEFAULT_VITALDB_PPG_SECONDS,
+        basic_feature_keys,
         ppg_best_segment_seconds,
+        ppg_csv_column,
         ppg_feature_groups,
         ppg_filter,
+        ppg_sqa_method,
         ppg_sqa_threshold,
         ppg_target_fs,
         resolve_config_dataset,
         resolve_ppg_center_window_seconds,
+        use_interaction_features,
     )
     from data_loader import resolve_dataset_root
 
@@ -163,6 +184,7 @@ def main():
         refresh_cache=args.refresh_cache,
         ppg_seconds=ppg_seconds,
     )
+    ds, label, y_unit, plot_clarke = retarget_tabular_frame(ds, args.label)
     # Leakage if the same subject appears in train and val with multiple rows
     # (MUST/vitaldb sessions, or windowed PPG).
     multi_sample_subjects = (
@@ -179,6 +201,8 @@ def main():
         f"target_fs={ppg_target_fs(args.dataset)}, "
         f"best_segment_seconds={ppg_best_segment_seconds(args.dataset)}, "
         f"feature_groups={ppg_feature_groups(args.dataset)}, "
+        f"ppg_csv_column={ppg_csv_column(args.dataset)}, "
+        f"sqa_method={ppg_sqa_method(args.dataset)}, "
         f"sqa_threshold={ppg_sqa_threshold(args.dataset)})"
     )
     sessions = None
@@ -205,6 +229,61 @@ def main():
                 f"Sample-wise CV (KFold over rows; subject leakage allowed): "
                 f"{len(y)} samples"
             )
+    if label != 'glucose' and label in X.columns:
+        X = X.drop(columns=[label])
+        feature_names = [name for name in feature_names if name != label]
+        print(f'Dropped {label} from X (would leak the prediction target)')
+    if args.only_basic:
+        keys = [k for k in basic_feature_keys(args.dataset) if k in X.columns]
+        missing = [k for k in basic_feature_keys(args.dataset) if k not in X.columns]
+        if missing:
+            print(f'--only-basic: dropping missing demographic keys {missing}')
+        if not keys:
+            raise SystemExit(
+                '--only-basic requires demographic columns from BASIC_FEATURE_KEYS; '
+                f'none found in X ({list(X.columns)[:12]}…)'
+            )
+        X = X[keys]
+        feature_names = keys
+        print(f'PPG dropped; demographics only: {keys}')
+    elif label != 'glucose':
+        demo_keys = [k for k in ('sex', 'age', 'height', 'weight', 'bmi') if k in X.columns]
+        if demo_keys:
+            X = X.drop(columns=demo_keys)
+            feature_names = [name for name in feature_names if name not in demo_keys]
+            print(f'PPG-only {label}: dropped demographics {demo_keys}')
+    else:
+        # Glucose: keep only BASIC_FEATURE_KEYS demos (extra attach cols are for --label).
+        allowed = set(basic_feature_keys(args.dataset))
+        extra = [
+            k for k in ('sex', 'age', 'height', 'weight', 'bmi')
+            if k in X.columns and k not in allowed
+        ]
+        if extra:
+            X = X.drop(columns=extra)
+            feature_names = [name for name in feature_names if name not in extra]
+            print(f'Glucose inputs: dropped non-BASIC demos {extra}')
+
+    if use_interaction_features(args.dataset) and not args.only_basic:
+        X, added = utils.add_interaction_features(X)
+        if added:
+            feature_names = list(feature_names) + added
+            print(f'Added {len(added)} interaction features: {added}')
+
+    if args.consensus_top is not None:
+        from consensus_top_features import RANKINGS, consensus
+
+        wanted = [row['feature'] for row in consensus(RANKINGS, top=args.consensus_top)]
+        keep = [name for name in wanted if name in X.columns]
+        missing = [name for name in wanted if name not in X.columns]
+        if missing:
+            print(f'--consensus-top: missing {len(missing)} features (skipped): {missing}')
+        if not keep:
+            raise SystemExit('--consensus-top: none of the consensus features are in X')
+        X = X[keep]
+        feature_names = keep
+        print(f'Using fixed consensus top {args.consensus_top}: {len(keep)} features')
+
     print(
         f"Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}, "
         f"features: {X.shape[1]}"
@@ -225,7 +304,7 @@ def main():
         all_preds.append(train_and_predict(seed))
     training_pred = np.mean(np.column_stack(all_preds), axis=1)
     mae = np.mean(np.abs(training_pred - y))
-    print(f"Training MAE: {mae:.4f} mmol/L")
+    print(f"Training MAE: {mae:.4f} {y_unit}")
 
     summary_df, fi = utils.run_repeated_kfold_training(
         X,
@@ -237,6 +316,8 @@ def main():
         select_top_n=args.select_top,
         groups=groups,
         sessions=sessions,
+        y_unit=y_unit,
+        plot_clarke=plot_clarke,
     )
     n_evaluations = int(summary_df['n_evaluations'].iloc[0])
     if args.select_top is not None:

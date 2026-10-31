@@ -9,6 +9,7 @@ from torch.utils.data import DataLoader, TensorDataset
 import data_loader
 import utils
 from config import tensor_to_numpy, torch_device, torch_float_tensor
+from waveform_train import as_nct, waveform_length, waveform_n_channels
 
 
 def build_parser():
@@ -42,11 +43,11 @@ def standardize_train_test(X_train: np.ndarray, X_test: np.ndarray) -> tuple[np.
 
 
 class PPGCNNRegressor(nn.Module):
-    def __init__(self, input_length: int, n_demographics: int = 0):
+    def __init__(self, input_length: int, n_demographics: int = 0, in_channels: int = 1):
         super().__init__()
         self.n_demographics = n_demographics
         self.network = nn.Sequential(
-            nn.Conv1d(1, 16, kernel_size=9, padding=4),
+            nn.Conv1d(in_channels, 16, kernel_size=9, padding=4),
             nn.BatchNorm1d(16),
             nn.ReLU(),
             nn.MaxPool1d(kernel_size=2),
@@ -83,7 +84,7 @@ def make_loader(
     shuffle: bool,
     demographics: Optional[np.ndarray] = None,
 ) -> DataLoader:
-    tensor_x = torch_float_tensor(X[:, None, :])
+    tensor_x = torch_float_tensor(as_nct(X))
     if y is None:
         dataset = TensorDataset(tensor_x)
     elif demographics is not None:
@@ -214,7 +215,11 @@ def run_fold(
         X_val, y_val, args.batch_size, False, demographics=demo_val
     )
 
-    model = PPGCNNRegressor(input_length=X.shape[1], n_demographics=n_demographics).to(device)
+    model = PPGCNNRegressor(
+        input_length=waveform_length(X),
+        n_demographics=n_demographics,
+        in_channels=waveform_n_channels(X),
+    ).to(device)
     train_model(
         model,
         train_loader,
@@ -247,7 +252,8 @@ def main():
     X = signals
     print(
         f'Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}, '
-        f'waveform_length: {signals.shape[1]}, input_length: {X.shape[1]}'
+        f'waveform_length: {waveform_length(signals)}, '
+        f'channels: {waveform_n_channels(signals)}, input_length: {waveform_length(X)}'
     )
 
     def predict_fold(train_index: np.ndarray, val_index: np.ndarray, seed: int) -> np.ndarray:
