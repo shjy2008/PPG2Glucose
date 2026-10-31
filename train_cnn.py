@@ -9,7 +9,14 @@ from torch.utils.data import DataLoader, TensorDataset
 import data_loader
 import utils
 from config import tensor_to_numpy, torch_device, torch_float_tensor
-from waveform_train import as_nct, waveform_length, waveform_n_channels
+from waveform_train import (
+    as_nct,
+    normalize_signals_per_sample,
+    normalize_targets,
+    standardize_train_test,
+    waveform_length,
+    waveform_n_channels,
+)
 
 
 def build_parser():
@@ -32,14 +39,6 @@ def build_parser():
     p.add_argument('--no-basic', dest='include_basic', action='store_false')
     p.set_defaults(include_basic=False)
     return p
-
-
-def standardize_train_test(X_train: np.ndarray, X_test: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    mean = X_train.mean()
-    std = X_train.std()
-    if std == 0:
-        std = 1.0
-    return (X_train - mean) / std, (X_test - mean) / std
 
 
 class PPGCNNRegressor(nn.Module):
@@ -197,8 +196,8 @@ def run_fold(
     demographics: Optional[np.ndarray] = None,
 ) -> np.ndarray:
     X_train, X_val = X[train_index], X[val_index]
-    y_train, y_val = y[train_index], y[val_index]
-    X_train, X_val = standardize_train_test(X_train, X_val)
+    y_train, y_mean, y_std = normalize_targets(y[train_index])
+    y_val = ((y[val_index] - y_mean) / y_std).astype(np.float32)
 
     use_demographics = args.include_basic and demographics is not None and demographics.size > 0
     demo_train = demo_val = None
@@ -232,7 +231,7 @@ def run_fold(
     )
 
     predictions = predict(model, val_loader, device, use_demographics=use_demographics)
-    return predictions
+    return predictions * y_std + y_mean
 
 
 def main():
@@ -249,7 +248,7 @@ def main():
         include_basic=args.include_basic,
         max_samples=args.max_samples,
     )
-    X = signals
+    X = normalize_signals_per_sample(signals)
     print(
         f'Data for training - X.size: {X.shape[0]}, y.size: {y.shape[0]}, '
         f'waveform_length: {waveform_length(signals)}, '
