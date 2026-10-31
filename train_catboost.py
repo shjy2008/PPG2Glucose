@@ -112,6 +112,7 @@ def build_parser():
     p.add_argument(
         '--refresh-cache',
         action='store_true',
+        default=True,
         help='Re-extract PPG features and overwrite the feature cache',
     )
     p.add_argument(
