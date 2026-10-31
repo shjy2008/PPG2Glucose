@@ -242,11 +242,12 @@ def main():
     device = torch_device()
 
     print(f'Using dataset: {args.dataset}')
-    signals, demographics, y = data_loader.load_waveform_dataset(
+    signals, demographics, y, groups = data_loader.load_waveform_dataset(
         dataset=args.dataset,
         signal_length=args.signal_length,
         include_basic=args.include_basic,
         max_samples=args.max_samples,
+        return_groups=True,
     )
     X = normalize_signals_per_sample(signals)
     print(
@@ -254,6 +255,7 @@ def main():
         f'waveform_length: {waveform_length(signals)}, '
         f'channels: {waveform_n_channels(signals)}, input_length: {waveform_length(X)}'
     )
+    print(f'Subject-wise CV (LSPO): {len(np.unique(groups))} unique subjects')
 
     def predict_fold(train_index: np.ndarray, val_index: np.ndarray, seed: int) -> np.ndarray:
         torch.manual_seed(seed)
@@ -267,6 +269,7 @@ def main():
         predict_fold,
         model_name='cnn',
         n_splits=args.n_splits,
+        groups=groups,
     )
 
 
