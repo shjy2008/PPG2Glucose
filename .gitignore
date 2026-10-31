@@ -33,7 +33,8 @@ seg_error_grid.png
 
 # documents
 papers/
-paper/
+paper_PAKDD/
+paper_RCMLR/
 *.xlsx
 
 # TinyML code
