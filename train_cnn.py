@@ -14,6 +14,7 @@ from waveform_train import (
     normalize_signals_per_sample,
     normalize_targets,
     set_seed,
+    split_train_val,
     standardize_train_test,
     waveform_length,
     waveform_n_channels,
@@ -207,22 +208,30 @@ def run_fold(
     X: np.ndarray,
     y: np.ndarray,
     train_index: np.ndarray,
-    val_index: np.ndarray,
+    test_index: np.ndarray,
     args,
     device: torch.device,
+    groups: Optional[np.ndarray] = None,
     demographics: Optional[np.ndarray] = None,
     seed: int = 0,
 ) -> np.ndarray:
-    X_train, X_val = X[train_index], X[val_index]
-    y_train, y_mean, y_std = normalize_targets(y[train_index])
-    y_val = ((y[val_index] - y_mean) / y_std).astype(np.float32)
+    # Outer fold is the reported test set. Early stopping uses 25% of the
+    # training subjects only, matching TinyML and CBHFF.
+    inner_train, inner_val = split_train_val(train_index, groups, 0.25, seed)
+    X_train, X_val, X_test = X[inner_train], X[inner_val], X[test_index]
+    y_train, y_mean, y_std = normalize_targets(y[inner_train])
+    y_val = ((y[inner_val] - y_mean) / y_std).astype(np.float32)
 
     use_demographics = args.include_basic and demographics is not None and demographics.size > 0
-    demo_train = demo_val = None
+    demo_train = demo_val = demo_test = None
     n_demographics = 0
     if use_demographics:
-        demo_train, demo_val = demographics[train_index], demographics[val_index]
-        demo_train, demo_val = standardize_train_test(demo_train, demo_val)
+        demo_train, demo_val = standardize_train_test(
+            demographics[inner_train], demographics[inner_val]
+        )
+        _, demo_test = standardize_train_test(
+            demographics[inner_train], demographics[test_index]
+        )
         n_demographics = demo_train.shape[1]
 
     train_loader = make_loader(
@@ -230,6 +239,9 @@ def run_fold(
     )
     val_loader = make_loader(
         X_val, y_val, args.batch_size, False, seed, demographics=demo_val
+    )
+    test_loader = make_loader(
+        X_test, None, args.batch_size, False, seed, demographics=demo_test
     )
 
     model = PPGCNNRegressor(
@@ -248,7 +260,7 @@ def run_fold(
         use_demographics=use_demographics,
     )
 
-    predictions = predict(model, val_loader, device, use_demographics=use_demographics)
+    predictions = predict(model, test_loader, device, use_demographics=use_demographics)
     return predictions * y_std + y_mean
 
 
@@ -293,7 +305,15 @@ def main():
     def predict_fold(train_index: np.ndarray, val_index: np.ndarray, seed: int) -> np.ndarray:
         set_seed(seed)
         return run_fold(
-            X, y, train_index, val_index, args, device, demographics=demographics, seed=seed
+            X,
+            y,
+            train_index,
+            val_index,
+            args,
+            device,
+            groups=cv_groups,
+            demographics=demographics,
+            seed=seed,
         )
 
     utils.run_repeated_kfold_array_cv(
